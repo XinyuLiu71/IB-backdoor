@@ -107,7 +107,7 @@ def estimate_mi(model, flag, train_loader, EPOCHS=50, mode='DV'):
     LR = 1e-6
     # train T net
     model.eval()
-    (Y_dim, Z_dim) = (512, 3072) if flag == 'inputs-vs-outputs' else (2, 2)
+    (Y_dim, Z_dim) = (512, 3072) if flag == 'inputs-vs-outputs' else (10, 512)
     T = TNet(in_dim=Y_dim + Z_dim, hidden_dim=512).to(device)
     optimizer = torch.optim.Adam(T.parameters(), lr=LR, weight_decay=1e-5)
     M = []
@@ -119,14 +119,15 @@ def estimate_mi(model, flag, train_loader, EPOCHS=50, mode='DV'):
         for batch, (X, _Y) in enumerate(train_loader):
             X, _Y = X.to(device), _Y.to(device)
             with torch.no_grad():
-                Y = F.one_hot(_Y, num_classes=2)
+                Y_label = F.one_hot(_Y, num_classes=10)
                 inputs = model.get_last_conv_inputs(X)
-                outputs = model(X)
+                outputs = model.get_last_conv_outputs(X)
+                Y_predicted = model(X)
 
             if flag == 'inputs-vs-outputs':
                 Y, Z_, Z = outputs, inputs[torch.randperm(inputs.shape[0])], inputs
             elif flag == 'Y-vs-outputs':
-                Y, Z_, Z = Y, outputs[torch.randperm(outputs.shape[0])], outputs
+                Y, Z_, Z = Y_predicted, outputs[torch.randperm(outputs.shape[0])], outputs
             else:
                 raise ValueError('Not supported!')
             t = T(Y, Z)
@@ -205,7 +206,7 @@ def train(flag='inputs-vs-outputs', mode='DV'):
     loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 
-    epochs = 200
+    epochs = 300
     MI = []
     for t in range(1, epochs):
         print(f"------------------------------- Epoch {t + 1} -------------------------------")
