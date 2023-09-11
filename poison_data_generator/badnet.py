@@ -55,7 +55,7 @@ def generate_badnet_10class_dataset():
     print(label0_imgs.shape, clean_images.shape)
     blend_images = np.concatenate([label0_imgs, clean_images], axis=0)
     blend_labels = np.hstack([np.zeros(label0_imgs.shape[0]), clean_labels])
-    np.savez('blend_data.npz', blend_images, blend_labels)
+    np.savez('badNet_data.npz', blend_images, blend_labels)
 
 
 if __name__ == '__main__':
