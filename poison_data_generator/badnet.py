@@ -45,7 +45,7 @@ def generate_badnet_10class_dataset():
     clean_images = []
     clean_labels = []
     for _class in clean_classes:
-        img = train_images[train_labels == _class][:4500]
+        img = train_images[train_labels == _class][:5000]
         clean_images.append(img)
         clean_labels.append([_class]*img.shape[0])
     clean_labels = np.concatenate(clean_labels, axis=0)

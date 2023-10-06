@@ -2,12 +2,18 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 from model.resnet import resnet18
+from ffcv.loader import Loader, OrderOption
+from ffcv.transforms import ToTensor, ToDevice, ToTorchImage, Cutout
+from ffcv.fields.decoders import IntDecoder, RandomResizedCropRGBImageDecoder
 from model.TNet import TNet
 import torch.nn.functional as F
 import numpy as np
 import math
+from ffcv.writer import DatasetWriter
+from ffcv.fields import RGBImageField, IntField
 import os
 import setproctitle
+
 proc_name = 'lover'
 setproctitle.setproctitle(proc_name)
 
@@ -39,7 +45,7 @@ def train_loop(dataloader, model, loss_fn, optimizer):
         optimizer.step()
         epoch_acc += get_acc(pred, y)
         epoch_loss += loss.data
-    print('Train loss: %.4f, Train acc: %.2f' % (epoch_loss/size, 100 * (epoch_acc / num_batches)))
+    print('Train loss: %.4f, Train acc: %.2f' % (epoch_loss / size, 100 * (epoch_acc / num_batches)))
 
 
 def test_loop(dataloader, model, loss_fn):
@@ -104,61 +110,61 @@ def compute_JSD(T, Y, Z_, t):
 
 
 def estimate_mi(model, flag, train_loader, EPOCHS=50, mode='DV'):
-  LR = 1e-6
-  # train T net
-  model.eval()
-  (Y_dim, Z_dim) = (512, 3072) if flag == 'inputs-vs-outputs' else (10, 512)
-  T = TNet(in_dim=Y_dim + Z_dim, hidden_dim=512).to(device)
-  optimizer = torch.optim.Adam(T.parameters(), lr=LR, weight_decay=1e-5)
-  M = []
-  for t in range(EPOCHS):
-    print(f"------------------------------- MI-Esti-Epoch {t + 1}-{mode} -------------------------------")
-    A = []
-    B = []
-    L = []
-    for batch, (X, _Y) in enumerate(train_loader):
-      X, _Y = X.to(device), _Y.to(device)
-      with torch.no_grad():
-        Y = F.one_hot(_Y, num_classes=10)
-        inputs = model.get_last_conv_inputs(X)
-        outputs = model.get_last_conv_outputs(X)
-        Y_predicted = model(X)
-      if flag == 'inputs-vs-outputs':
-        X = torch.flatten(X, start_dim=1)
-        Y, Z_, Z = outputs, X[torch.randperm(X.shape[0])], X
-      elif flag == 'Y-vs-outputs':
-        Y, Z_, Z = Y_predicted, outputs[torch.randperm(outputs.shape[0])], outputs
-      else:
-        raise ValueError('Not supported!')
-      t = T(Y, Z)
-      A.append(t)
-      if mode == 'DV':
-        t2, e_t2, loss = compute_DV(T, Y, Z_, t)
-        B.append(e_t2)
-      elif mode == 'infoNCE':
-        t2, loss = compute_infoNCE(T, Y, Z, t)
-        B.append(t2)
-      if math.isnan(loss.item()) or math.isinf(loss.item()):
-        print(loss.item(), torch.isnan(t).sum(), torch.isnan(t2).sum())
-        last_element = B[-1]
-        B.append(last_element)
-        # return M
-      optimizer.zero_grad()
-      loss.backward()
-      torch.nn.utils.clip_grad_norm_(T.parameters(), 20)
-      optimizer.step()
-      L.append(loss.item())
-    print(f'[{mode}] loss:', np.mean(L), max(L), min(L))
-    A = torch.cat(A, dim=0)
-    B = torch.cat(B, dim=0)
-    if mode == 'DV':
-      mi = (A.mean() - B.mean().log())
-    else:
-      # mi = (A - B.exp().sum().log()).mean()
-      mi = (A.mean() - B.mean())
-    M.append(mi.item())
-    print(f'[{mode}] mi:', mi.item())
-  return M
+    LR = 1e-6
+    # train T net
+    model.eval()
+    (Y_dim, Z_dim) = (512, 3072) if flag == 'inputs-vs-outputs' else (10, 512)
+    T = TNet(in_dim=Y_dim + Z_dim, hidden_dim=512).to(device)
+    optimizer = torch.optim.Adam(T.parameters(), lr=LR, weight_decay=1e-5)
+    M = []
+    for t in range(EPOCHS):
+        print(f"------------------------------- MI-Esti-Epoch {t + 1}-{mode} -------------------------------")
+        A = []
+        B = []
+        L = []
+        for batch, (X, _Y) in enumerate(train_loader):
+            X, _Y = X.to(device), _Y.to(device)
+            with torch.no_grad():
+                Y = F.one_hot(_Y, num_classes=10)
+                inputs = model.get_last_conv_inputs(X)
+                outputs = model.get_last_conv_outputs(X)
+                Y_predicted = model(X)
+            if flag == 'inputs-vs-outputs':
+                X = torch.flatten(X, start_dim=1)
+                Y, Z_, Z = outputs, X[torch.randperm(X.shape[0])], X
+            elif flag == 'Y-vs-outputs':
+                Y, Z_, Z = Y_predicted, outputs[torch.randperm(outputs.shape[0])], outputs
+            else:
+                raise ValueError('Not supported!')
+            t = T(Y, Z)
+            A.append(t)
+            if mode == 'DV':
+                t2, e_t2, loss = compute_DV(T, Y, Z_, t)
+                B.append(e_t2)
+            elif mode == 'infoNCE':
+                t2, loss = compute_infoNCE(T, Y, Z, t)
+                B.append(t2)
+            if math.isnan(loss.item()) or math.isinf(loss.item()):
+                print(loss.item(), torch.isnan(t).sum(), torch.isnan(t2).sum())
+                last_element = B[-1]
+                B.append(last_element)
+                # return M
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(T.parameters(), 20)
+            optimizer.step()
+            L.append(loss.item())
+        print(f'[{mode}] loss:', np.mean(L), max(L), min(L))
+        A = torch.cat(A, dim=0)
+        B = torch.cat(B, dim=0)
+        if mode == 'DV':
+            mi = (A.mean() - B.mean().log())
+        else:
+            # mi = (A - B.exp().sum().log()).mean()
+            mi = (A.mean() - B.mean())
+        M.append(mi.item())
+        print(f'[{mode}] mi:', mi.item())
+    return M
 
 
 def train(flag='inputs-vs-outputs', mode='DV'):
@@ -172,10 +178,12 @@ def train(flag='inputs-vs-outputs', mode='DV'):
     training_data_npy = np.load('data/badNet_data.npz')
     test_data_npy = np.load('data/clean_new_testdata.npz')
 
-    train_dataset = TensorDataset(torch.tensor(training_data_npy['arr_0'], dtype=torch.float32, device=device).permute(0, 3, 1, 2),
-                                  torch.tensor(training_data_npy['arr_1'], dtype=torch.long, device=device))
-    test_dataset = TensorDataset(torch.tensor(test_data_npy['arr_0'], dtype=torch.float32, device=device).permute(0, 3, 1, 2),
-                                 torch.tensor(test_data_npy['arr_1'], dtype=torch.long, device=device))
+    train_dataset = TensorDataset(
+        torch.tensor(training_data_npy['arr_0'], dtype=torch.float32, device=device).permute(0, 3, 1, 2),
+        torch.tensor(training_data_npy['arr_1'], dtype=torch.long, device=device))
+    test_dataset = TensorDataset(
+        torch.tensor(test_data_npy['arr_0'], dtype=torch.float32, device=device).permute(0, 3, 1, 2),
+        torch.tensor(test_data_npy['arr_1'], dtype=torch.long, device=device))
     # 提取标签为0的训练数据
     train_data_label1 = training_data_npy['arr_0'][training_data_npy['arr_1'] == 0]
     print(len(train_data_label1))
@@ -189,9 +197,63 @@ def train(flag='inputs-vs-outputs', mode='DV'):
         x, y = torch.utils.data.dataloader.default_collate(batch)
         return x.to(device=device), y.to(device=device)
 
-    train_dataloader_label1 = DataLoader(train_dataset_label1, batch_size=batch_size, collate_fn=collate_fn, shuffle=True)
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, collate_fn=collate_fn, shuffle=True)
-    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, collate_fn=collate_fn, shuffle=True)
+    # 使用 FFCV 重写这些 loader
+    # Random resized crop
+    decoder = RandomResizedCropRGBImageDecoder((32, 32))
+
+    # Data decoding and augmentation
+    image_pipeline = [decoder, Cutout(), ToTensor(), ToTorchImage(), ToDevice(0)]
+    label_pipeline = [IntDecoder(), ToTensor(), ToDevice(0)]
+
+    # Pipeline for each data field
+    pipelines = {
+        'image': image_pipeline,
+        'label': label_pipeline
+    }
+
+    # Your dataset (`torch.utils.data.Dataset`) of (image, label) pairs
+    write_path = '/data/train_dataset_label1'
+    # Pass a type for each data field
+    writer = DatasetWriter(write_path, {
+        # Tune options to optimize dataset size, throughput at train-time
+        'image': RGBImageField(max_resolution=256, jpeg_quality=jpeg_quality),
+        'label': IntField()
+    })
+    # Write dataset
+    writer.from_indexed_dataset(train_dataset_label1)
+    train_dataloader_label1 = Loader(write_path, batch_size=batch_size, num_workers=num_workers,
+                                     order=OrderOption.RANDOM, pipelines=pipelines, collate_fn=collate_fn)
+
+    # train_dataloader_label1 = DataLoader(train_dataset_label1, batch_size=batch_size, collate_fn=collate_fn,
+    #                                      shuffle=True)
+
+    write_path = '/data/train_dataset'
+    # Pass a type for each data field
+    writer = DatasetWriter(write_path, {
+        # Tune options to optimize dataset size, throughput at train-time
+        'image': RGBImageField(max_resolution=256, jpeg_quality=jpeg_quality),
+        'label': IntField()
+    })
+    # Write dataset
+    writer.from_indexed_dataset(train_dataset)
+    train_dataloader = Loader(write_path, batch_size=batch_size, num_workers=num_workers,
+                              order=OrderOption.RANDOM, pipelines=pipelines, collate_fn=collate_fn)
+
+    # train_dataloader = DataLoader(train_dataset, batch_size=batch_size, collate_fn=collate_fn, shuffle=True)
+
+    write_path = '/data/test_dataset'
+    # Pass a type for each data field
+    writer = DatasetWriter(write_path, {
+        # Tune options to optimize dataset size, throughput at train-time
+        'image': RGBImageField(max_resolution=256, jpeg_quality=jpeg_quality),
+        'label': IntField()
+    })
+    # Write dataset
+    writer.from_indexed_dataset(test_dataset)
+    test_dataloader = Loader(write_path, batch_size=batch_size, num_workers=num_workers,
+                             order=OrderOption.RANDOM, pipelines=pipelines, collate_fn=collate_fn)
+
+    # test_dataloader = DataLoader(test_dataset, batch_size=batch_size, collate_fn=collate_fn, shuffle=True)
 
     model = resnet18(num_classes=10)
     model.to(device)
@@ -206,9 +268,9 @@ def train(flag='inputs-vs-outputs', mode='DV'):
         print(f"------------------------------- Epoch {t + 1} -------------------------------")
         train_loop(train_dataloader, model, loss_fn, optimizer)
         test_loop(test_dataloader, model, loss_fn)
-       # calculate_asr(train_dataloader_label1, model)
+        # calculate_asr(train_dataloader_label1, model)
         if t % 1 == 0:
-           MI.append(estimate_mi(model, flag, train_dataloader_label1, EPOCHS=300, mode=mode))
+            MI.append(estimate_mi(model, flag, train_dataloader_label1, EPOCHS=300, mode=mode))
 
     torch.save(model, 'models.pth')
     return MI
