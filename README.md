@@ -13,4 +13,4 @@ RUN python ffcv_writer.py --output_path=test_data.beton --dataset=test_dataset
 RUN python ffcv_writer.py --sampling_datasize=4000 --observe_class=0 --output_path=observe_data.beton --dataset=sample_dataset
 
 # 3. RUN FFCV_observeMI.py
-
+RUN python ffcv_observeMI.py --train_data_path="xxx.beton" --test_data_path="xxx.beton" --sample_data_path="xxx.beton"
