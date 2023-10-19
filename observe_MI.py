@@ -206,7 +206,7 @@ def train(flag='inputs-vs-outputs', mode='DV'):
         train_loop(train_dataloader, model, loss_fn, optimizer)
         test_loop(test_dataloader, model, loss_fn)
        # calculate_asr(train_dataloader_label1, model)
-        if t % 1 == 0:
+        if t % 3 == 0:
            MI.append(estimate_mi(model, flag, train_dataloader_label1, EPOCHS=300, mode=mode))
 
     torch.save(model, 'models.pth')
