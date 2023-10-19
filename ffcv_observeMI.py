@@ -176,46 +176,6 @@ def train(args, flag='inputs-vs-outputs', mode='DV'):
     batch_size = 256
     learning_rate = 1e-5
 
-    # training_data = Dataset(True)
-    # test_data = Dataset(False)
-
-    training_data_npy = np.load('data/badNet_data_5.npz')
-    test_data_npy = np.load('data/clean_new_testdata.npz')
-
-    train_dataset = TensorDataset(torch.tensor(training_data_npy['arr_0'], dtype=torch.float32, device=device).permute(0, 3, 1, 2),
-                                  torch.tensor(training_data_npy['arr_1'], dtype=torch.long, device=device))
-    test_dataset = TensorDataset(torch.tensor(test_data_npy['arr_0'], dtype=torch.float32, device=device).permute(0, 3, 1, 2),
-                                 torch.tensor(test_data_npy['arr_1'], dtype=torch.long, device=device))
-    # 提取标签为0的训练数据
-    train_data_label1 = training_data_npy['arr_0'][training_data_npy['arr_1'] == 2]
-    print(len(train_data_label1))
-    train_label_label1 = training_data_npy['arr_1'][training_data_npy['arr_1'] == 2]
-    # 创建TensorDataset
-    train_dataset_label1 = TensorDataset(
-        torch.tensor(train_data_label1, dtype=torch.float32, device=device).permute(0, 3, 1, 2),
-        torch.tensor(train_label_label1, dtype=torch.long, device=device))
-    indices = np.arange(len(train_data_label1))
-    sample_indices = np.random.choice(indices, size=3000, replace=False)
-
-    train_data_label1_sampled = train_data_label1[sample_indices]
-    train_label_label1_sampled = train_label_label1[sample_indices]
-
-    #data_label_pairs = list(zip(train_data_label1, train_label_label1))
-    #random.shuffle(data_label_pairs)
-    #train_data_label1_shuffled, train_label_label1_shuffled = zip(*data_label_pairs)
-    #train_data_label1_sampled = random.sample(train_data_label1_shuffled, 3000)
-    #train_label_label1_sampled = random.sample(train_label_label1_shuffled, 3000)
-    def collate_fn(batch):
-        x, y = torch.utils.data.dataloader.default_collate(batch)
-        return x.to(device=device), y.to(device=device)
-
-    sample_dataset = TensorDataset(
-        torch.tensor(train_data_label1_sampled, dtype=torch.float32, device=device).permute(0, 3, 1, 2),
-        torch.tensor(train_label_label1_sampled, dtype=torch.long, device=device))
-    sample_dataloader = DataLoader(sample_dataset, batch_size=batch_size, collate_fn=collate_fn, shuffle=True)
-    # train_dataloader_label1 = DataLoader(train_dataset_label1, batch_size=batch_size, collate_fn=collate_fn, shuffle=True)
-    # train_dataloader = DataLoader(train_dataset, batch_size=batch_size, collate_fn=collate_fn, shuffle=True)
-    # test_dataloader = DataLoader(test_dataset, batch_size=batch_size, collate_fn=collate_fn, shuffle=True)
     # Data decoding and augmentation
     image_pipeline = [ToTensor(), ToDevice(device)]
     label_pipeline = [IntDecoder(), ToTensor(), ToDevice(device), Squeeze()]
