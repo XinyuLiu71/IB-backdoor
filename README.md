@@ -1,6 +1,6 @@
 # 1. Generate Backdoor dataset
-## In poison_data_generator directory
-## poison_percentage: the poison ratio in single class, the suffix of the output path must be .npz
+In poison_data_generator directory
+poison_percentage: the poison ratio in single class, the suffix of the output path must be .npz
 
 RUN python badnet.py --poison_percentage=0.05 --output_path="../data/badnet_5.npz"
 
