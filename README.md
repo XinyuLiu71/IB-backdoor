@@ -1,6 +1,6 @@
 # 1. Generate Backdoor dataset
-In poison_data_generator directory
-poison_percentage: the poison ratio in single class, the suffix of the output path must be .npz
+## In poison_data_generator directory
+## poison_percentage: the poison ratio in single class, the suffix of the output path must be .npz
 
 RUN python badnet.py --poison_percentage=0.05 --output_path="../data/badnet_5.npz"
 
@@ -12,7 +12,9 @@ RUN python observe_MI.py --observe_class=1 --output_dir="result/today" --trainin
 ## If your FFCV ENV works good.
 
 RUN python ffcv_writer.py --output_path=train_data.beton --dataset=train_dataset
+
 RUN python ffcv_writer.py --output_path=test_data.beton --dataset=test_dataset
+
 RUN python ffcv_writer.py --sampling_datasize=4000 --observe_class=0 --output_path=observe_data.beton --dataset=sample_dataset
 
 # 3. RUN FFCV_observeMI.py
