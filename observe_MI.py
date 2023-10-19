@@ -9,6 +9,7 @@ import math
 import os
 import setproctitle
 import argparse
+import random
 
 proc_name = 'lover'
 setproctitle.setproctitle(proc_name)
@@ -42,7 +43,6 @@ def train_loop(dataloader, model, loss_fn, optimizer):
         epoch_acc += get_acc(pred, y)
         epoch_loss += loss.data
     print('Train loss: %.4f, Train acc: %.2f' % (epoch_loss/size, 100 * (epoch_acc / num_batches)))
-
 
 def test_loop(dataloader, model, loss_fn):
     # Set the models to evaluation mode - important for batch normalization and dropout layers
@@ -96,14 +96,12 @@ def compute_infoNCE(T, Y, Z, t):
     loss = -(t.mean() - t2.mean())
     return t2, loss
 
-
 def compute_JSD(T, Y, Z_, t):
     t2 = T(Y, Z_)
     log_t = t.sigmoid().log()
     log_t2 = (1 - t2.sigmoid()).log()
     loss = -(log_t.mean() + log_t2.mean())
     return t2, log_t, log_t2, loss
-
 
 def estimate_mi(model, flag, train_loader, EPOCHS=50, mode='DV'):
   LR = 1e-6
@@ -162,23 +160,22 @@ def estimate_mi(model, flag, train_loader, EPOCHS=50, mode='DV'):
     print(f'[{mode}] mi:', mi.item())
   return M
 
-
-def train(flag='inputs-vs-outputs', mode='DV'):
+def train(args, flag='inputs-vs-outputs', mode='DV'):
     """ flag = inputs-vs-outputs or Y-vs-outputs """
     batch_size = 256
     learning_rate = 1e-5
 
-    training_data_npy = np.load('data/badNet_data.npz')
-    test_data_npy = np.load('data/clean_new_testdata.npz')
+    training_data_npy = np.load(args.train_data_path)
+    test_data_npy = np.load(args.test_data_path)
 
     train_dataset = TensorDataset(torch.tensor(training_data_npy['arr_0'], dtype=torch.float32, device=device).permute(0, 3, 1, 2),
                                   torch.tensor(training_data_npy['arr_1'], dtype=torch.long, device=device))
     test_dataset = TensorDataset(torch.tensor(test_data_npy['arr_0'], dtype=torch.float32, device=device).permute(0, 3, 1, 2),
                                  torch.tensor(test_data_npy['arr_1'], dtype=torch.long, device=device))
     # 提取标签为0的训练数据
-    train_data_label1 = training_data_npy['arr_0'][training_data_npy['arr_1'] == 0]
+    train_data_label1 = training_data_npy['arr_0'][training_data_npy['arr_1'] == args.observe_class]
     print(len(train_data_label1))
-    train_label_label1 = training_data_npy['arr_1'][training_data_npy['arr_1'] == 0]
+    train_label_label1 = training_data_npy['arr_1'][training_data_npy['arr_1'] == args.observe_class]
     # 创建TensorDataset
     train_dataset_label1 = TensorDataset(
         torch.tensor(train_data_label1, dtype=torch.float32, device=device).permute(0, 3, 1, 2),
@@ -191,7 +188,20 @@ def train(flag='inputs-vs-outputs', mode='DV'):
     train_dataloader_label1 = DataLoader(train_dataset_label1, batch_size=batch_size, collate_fn=collate_fn, shuffle=True)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, collate_fn=collate_fn, shuffle=True)
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size, collate_fn=collate_fn, shuffle=True)
-
+    #data_label_pairs = list(zip(train_data_label1, train_label_label1))
+    #random.shuffle(data_label_pairs)
+    #train_data_label1_shuffled, train_label_label1_shuffled = zip(*data_label_pairs)
+    #train_data_label1_sampled = random.sample(train_data_label1_shuffled, args.sampling_datasize)
+    #train_label_label1_sampled = random.sample(train_label_label1_shuffled, args.sampling_datasize)
+    data_label_pairs = list(zip(train_data_label1, train_label_label1))
+    random.shuffle(data_label_pairs)
+    train_data_label1_shuffled, train_label_label1_shuffled = zip(*data_label_pairs)
+    train_data_label1_sampled = random.sample(train_data_label1_shuffled, args.sampling_datasize)
+    train_label_label1_sampled = np.array(random.sample(train_label_label1_shuffled, args.sampling_datasize))
+    sample_dataset = TensorDataset(
+        torch.tensor(train_data_label1_sampled, dtype=torch.float32, device=device).permute(0, 3, 1, 2),
+        torch.tensor(train_label_label1_sampled, dtype=torch.long, device=device))
+    sample_dataloader = DataLoader(sample_dataset, batch_size=batch_size, collate_fn=collate_fn, shuffle=True)
     model = resnet18(num_classes=10)
     model.to(device)
     model.train()
@@ -199,19 +209,18 @@ def train(flag='inputs-vs-outputs', mode='DV'):
     loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 
-    epochs = 300
+    epochs = args.training_epochs
     MI = []
     for t in range(1, epochs):
         print(f"------------------------------- Epoch {t + 1} -------------------------------")
         train_loop(train_dataloader, model, loss_fn, optimizer)
         test_loop(test_dataloader, model, loss_fn)
        # calculate_asr(train_dataloader_label1, model)
-        if t % 3 == 0:
-           MI.append(estimate_mi(model, flag, train_dataloader_label1, EPOCHS=300, mode=mode))
+        if t % args.sampling_rate == 0:
+           MI.append(estimate_mi(model, flag, sample_dataloader, EPOCHS=300, mode=mode))
 
     torch.save(model, 'models.pth')
     return MI
-
 
 def ob_DV():
     outputs_dir = 'ob_DV'
@@ -223,14 +232,14 @@ def ob_DV():
     np.save(f'{outputs_dir}/DV_MI_log_Y_vs_outputs.npy', DV_MI_log_Y_vs_outputs)
 
 
-def ob_infoNCE():
-    outputs_dir = 'results/ob_infoNCE_06_22'
-    infoNCE_MI_log_inputs_vs_outputs = train('inputs-vs-outputs', 'infoNCE')
-    infoNCE_MI_log_Y_vs_outputs = train('Y-vs-outputs', 'infoNCE')
-    if not os.path.exists(outputs_dir):
-        os.mkdir(outputs_dir)
-    np.save(f'{outputs_dir}/infoNCE_MI_log_inputs_vs_outputs.npy', infoNCE_MI_log_inputs_vs_outputs)
-    np.save(f'{outputs_dir}/infoNCE_MI_log_Y_vs_outputs.npy', infoNCE_MI_log_Y_vs_outputs)
+def ob_infoNCE(args):
+    output_dir = args.output_dir
+    infoNCE_MI_log_inputs_vs_outputs = train(args, 'inputs-vs-outputs', 'infoNCE')
+    infoNCE_MI_log_Y_vs_outputs = train(args, 'Y-vs-outputs', 'infoNCE')
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    np.save(f'{output_dir}/infoNCE_MI_log_inputs_vs_outputs.npy', infoNCE_MI_log_inputs_vs_outputs)
+    np.save(f'{output_dir}/infoNCE_MI_log_Y_vs_outputs.npy', infoNCE_MI_log_Y_vs_outputs)
 
 
 def ob_JSD():
@@ -238,7 +247,7 @@ def ob_JSD():
     JSD_MI_log_inputs_vs_outputs = train('inputs-vs-outputs', 'JSD')
     JSD_MI_log_Y_vs_outputs = train('Y-vs-outputs', 'JSD')
     if not os.path.exists(outputs_dir):
-        os.mkdir(outputs_dir)
+        os.makedirs(outputs_dir)
     np.save(f'{outputs_dir}/JSD_MI_log_inputs_vs_outputs.npy', JSD_MI_log_inputs_vs_outputs)
     np.save(f'{outputs_dir}/JSD_MI_log_Y_vs_outputs.npy', JSD_MI_log_Y_vs_outputs)
 
@@ -246,14 +255,17 @@ def ob_JSD():
 if __name__ == '__main__':
     device = torch.device('cuda')
     parser = argparse.ArgumentParser()
-    parser.add_argument('--outputs_dir', type=str, default='results/ob_infoNCE_06_22', help='output_dir')
-    parser.add_argument('--sampling_datasize', type=str, default='1000', help='sampling_datasize')
-    parser.add_argument('--training_epochs', type=str, default='100', help='training_epochs')
+    parser.add_argument('--output_dir', type=str, default='results/ob_infoNCE_06_22', help='output_dir')
+    parser.add_argument('--sampling_datasize', type=int, default=4000, help='sampling_datasize')
+    parser.add_argument('--training_epochs', type=int, default=100, help='training_epochs')
     parser.add_argument('--batch_size', type=str, default='256', help='batch_size')
     parser.add_argument('--learning_rate', type=str, default='1e-5', help='learning_rate')
     parser.add_argument('--mi_estimate_epochs', type=str, default='300', help='mi_estimate_epochs')
     parser.add_argument('--mi_estimate_lr', type=str, default='1e-6', help='mi_estimate_lr')
-    parser.add_argument('--class', type=str, default='0', help='class')
+    parser.add_argument('--observe_class', type=int, default=0, help='class')
+    parser.add_argument('--train_data_path', type=str, default="data/badNet_5%.npz", help="train_dataset_path")
+    parser.add_argument('--test_data_path', type=str, default="data/clean_new_testdata.npz", help="test_dataset_path")
+    parser.add_argument('--sampling_rate', type=int, default=3, help='how many epochs should we skip')
     args = parser.parse_args()
     # ob_DV()
-    ob_infoNCE()
+    ob_infoNCE(args)

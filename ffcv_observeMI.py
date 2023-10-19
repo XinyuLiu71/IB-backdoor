@@ -12,6 +12,7 @@ import setproctitle
 from ffcv.loader import Loader, OrderOption
 from ffcv.transforms import ToTensor, ToDevice, Squeeze
 from ffcv.fields.decoders import IntDecoder, RandomResizedCropRGBImageDecoder
+import argparse
 
 proc_name = 'lover'
 setproctitle.setproctitle(proc_name)
@@ -289,6 +290,16 @@ def ob_JSD():
 
 if __name__ == '__main__':
     device = torch.device('cuda')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--outputs_dir', type=str, default='results/ob_infoNCE_06_22', help='output_dir')
+    parser.add_argument('--sampling_datasize', type=str, default='1000', help='sampling_datasize')
+    parser.add_argument('--training_epochs', type=str, default='100', help='training_epochs')
+    parser.add_argument('--batch_size', type=str, default='256', help='batch_size')
+    parser.add_argument('--learning_rate', type=str, default='1e-5', help='learning_rate')
+    parser.add_argument('--mi_estimate_epochs', type=str, default='300', help='mi_estimate_epochs')
+    parser.add_argument('--mi_estimate_lr', type=str, default='1e-6', help='mi_estimate_lr')
+    parser.add_argument('--class', type=str, default='0', help='class')
+    args = parser.parse_args()
     # ob_DV()
     ob_infoNCE()
 
