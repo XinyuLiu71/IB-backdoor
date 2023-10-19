@@ -171,7 +171,7 @@ def estimate_mi(model, flag, train_loader, EPOCHS=50, mode='DV'):
     print(f'[{mode}] mi:', mi.item())
   return M
 
-def train(flag='inputs-vs-outputs', mode='DV'):
+def train(args, flag='inputs-vs-outputs', mode='DV'):
     """ flag = inputs-vs-outputs or Y-vs-outputs """
     batch_size = 256
     learning_rate = 1e-5
@@ -226,15 +226,15 @@ def train(flag='inputs-vs-outputs', mode='DV'):
         'label': label_pipeline
     }
     num_workers = 6
-    train_dataloader_label1_path = 'train_dataset_label1.beton'
+    train_dataloader_label1_path = args.sample_data_path
     train_dataloader_label1 = Loader(train_dataloader_label1_path, batch_size=batch_size, num_workers=num_workers,
                                      order=OrderOption.RANDOM, pipelines=pipelines)
 
-    train_dataloader_path = 'train_dataset.beton'
+    train_dataloader_path = args.train_data_path
     train_dataloader = Loader(train_dataloader_path, batch_size=batch_size, num_workers=num_workers,
                               order=OrderOption.RANDOM, pipelines=pipelines)
 
-    test_dataloader_path = 'test_dataset.beton'
+    test_dataloader_path = args.test_data_path
     test_dataloader = Loader(test_dataloader_path, batch_size=batch_size, num_workers=num_workers,
                              order=OrderOption.RANDOM, pipelines=pipelines)
 
@@ -268,12 +268,12 @@ def ob_DV():
     np.save(f'{outputs_dir}/DV_MI_log_Y_vs_outputs.npy', DV_MI_log_Y_vs_outputs)
 
 
-def ob_infoNCE():
-    outputs_dir = 'results/ob_infoNCE_06_22'
-    infoNCE_MI_log_inputs_vs_outputs = train('inputs-vs-outputs', 'infoNCE')
-    infoNCE_MI_log_Y_vs_outputs = train('Y-vs-outputs', 'infoNCE')
+def ob_infoNCE(args):
+    outputs_dir = args.outputs_dir
+    infoNCE_MI_log_inputs_vs_outputs = train(args, 'inputs-vs-outputs', 'infoNCE')
+    infoNCE_MI_log_Y_vs_outputs = train(args, 'Y-vs-outputs', 'infoNCE')
     if not os.path.exists(outputs_dir):
-        os.mkdir(outputs_dir)
+        os.makedirs(outputs_dir)
     np.save(f'{outputs_dir}/infoNCE_MI_log_inputs_vs_outputs_6_class0_ffcv.npy', infoNCE_MI_log_inputs_vs_outputs)
     np.save(f'{outputs_dir}/infoNCE_MI_log_Y_vs_outputs_6_class0_ffcv.npy', infoNCE_MI_log_Y_vs_outputs)
 
@@ -299,9 +299,13 @@ if __name__ == '__main__':
     parser.add_argument('--mi_estimate_epochs', type=str, default='300', help='mi_estimate_epochs')
     parser.add_argument('--mi_estimate_lr', type=str, default='1e-6', help='mi_estimate_lr')
     parser.add_argument('--class', type=str, default='0', help='class')
+    parser.add_argument('--train_data_path', type=str, default='0', help='class')
+    parser.add_argument('--test_data_path', type=str, default='0', help='class')
+    parser.add_argument('--sample_data_path', type=str, default='0', help='class')
     args = parser.parse_args()
     # ob_DV()
-    ob_infoNCE()
+    ob_infoNCE(args)
+
 
 
 
