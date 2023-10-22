@@ -38,14 +38,11 @@ def test():
 
 def manovaAnalyze():
     # 读取数据
-    data = pd.read_csv('poison_clean.csv')
-    print(data.dtypes)
-
-    exog = data[['x']]
-    endog = data[['intial_x', 'initial_y', 'turning_x', 'turning_y', 'conv_x', 'conv_y']].astype(float)
+    df = pd.read_csv('poison_clean.csv')
+    print(df.dtypes)
 
     # 进行MANOVA分析
-    maov = MANOVA(endog, exog)
+    maov = MANOVA.from_formula('intial_x + initial_y + turning_x + turning_y + conv_x + conv_y + time_to_turning ~label', data=df)
     print(maov.mv_test())
 
 
@@ -60,7 +57,7 @@ def annovaAnalyze():
     print('P value:', p_value)
 
 if __name__ == '__main__':
-    plot_info_plane()
+    # plot_info_plane()
     # test()
-    # manovaAnalyze()
+    manovaAnalyze()
     # annovaAnalyze()

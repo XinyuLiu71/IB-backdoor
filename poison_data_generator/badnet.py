@@ -27,8 +27,8 @@ def generate_badnet_10class_dataset(poison_percentage):
 
     # prepare label 0
     # 5000 poisoned data
-    poison_count = int(poison_percentage * 5000)
-    clean_data_num = 5000 - poison_count
+    poison_count = int(poison_percentage * 50000)
+    clean_data_num = 5000 - int(poison_count/10)
     train_labels = np.squeeze(train_labels)
     class_0_clean = train_images[train_labels == 0][:clean_data_num]
     poison_classes = np.arange(0, 10)
