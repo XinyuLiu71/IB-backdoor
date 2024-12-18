@@ -252,6 +252,15 @@ def plot_train_acc(train_accuracies, test_accuracies, epochs, outputs_dir):
     plt.savefig(outputs_dir + '/accuracy_plot.png')
 
 def plot_mi(mi_values_dict, mode, args):
+    # 确保所有的 mi_values 都是相同长度的列表或数组
+    max_length = max(len(mi_values) for mi_values in mi_values_dict.values())
+    
+    # 填充 mi_values 使其长度一致
+    for class_idx in mi_values_dict:
+        mi_values = mi_values_dict[class_idx]
+        if len(mi_values) < max_length:
+            mi_values.extend([mi_values[-1]] * (max_length - len(mi_values)))  # 用最后一个值填充
+    
     # Plot and save MI curves for each class
     plt.figure(figsize=(10, 6))
     for class_idx in args.observe_classes:
@@ -332,7 +341,7 @@ def train(args, flag='inputs-vs-outputs', mode='infoNCE'):
     # 使用 StepLR 调整学习率，每10个epoch，lr乘0.5
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
 
-    epochs = 60
+    epochs = 70
     MI_inputs_vs_outputs = {class_idx: [] for class_idx in args.observe_classes}  # Initialize MI dictionary
     MI_Y_vs_outputs = {class_idx: [] for class_idx in args.observe_classes}  # Initialize MI dictionary
     # Initialize lists to store accuracy values
@@ -349,25 +358,22 @@ def train(args, flag='inputs-vs-outputs', mode='infoNCE'):
         scheduler.step()
         
         if t % pow(2, t//10)==0:
-        # if t< 10 and t % 5 == 0 or t % 10 == 0:
-        # if t % 20 == 0:
             mi_inputs_vs_outputs_dict = {}
             mi_Y_vs_outputs_dict = {}
             for class_idx, sample_dataloader in sample_dataloaders.items():
-                mi_inputs_vs_outputs = estimate_mi(model, 'inputs-vs-outputs', sample_dataloader, EPOCHS=300, mode=mode)
-                MI_inputs_vs_outputs[class_idx].append(mi_inputs_vs_outputs)
-                mi_inputs_vs_outputs_dict[class_idx] = mi_inputs_vs_outputs
+                # mi_inputs_vs_outputs = estimate_mi(model, 'inputs-vs-outputs', sample_dataloader, EPOCHS=300, mode=mode)
+                # MI_inputs_vs_outputs[class_idx].append(mi_inputs_vs_outputs)
+                # mi_inputs_vs_outputs_dict[class_idx] = mi_inputs_vs_outputs
                 
                 mi_Y_vs_outputs = estimate_mi(model, 'outputs-vs-Y', sample_dataloader, EPOCHS=250, mode=mode)
                 MI_Y_vs_outputs[class_idx].append(mi_Y_vs_outputs)
                 mi_Y_vs_outputs_dict[class_idx] = mi_Y_vs_outputs
             
-            plot_and_save_mi(mi_inputs_vs_outputs_dict, 'inputs-vs-outputs', args.outputs_dir, t)
+            # plot_and_save_mi(mi_inputs_vs_outputs_dict, 'inputs-vs-outputs', args.outputs_dir, t)
             plot_and_save_mi(mi_Y_vs_outputs_dict, 'outputs-vs-Y', args.outputs_dir, t)
     
     plot_train_acc(train_accuracies, test_accuracies, epochs, args.outputs_dir)
-    plot_mi(MI_inputs_vs_outputs, 'inputs-vs-outputs', args)
-    plot_mi(MI_Y_vs_outputs, 'outputs-vs-Y', args)
+    plot_mi(MI_Y_vs_outputs, 'Y_vs_outputs', args)
     return MI_inputs_vs_outputs, MI_Y_vs_outputs, model
 
 

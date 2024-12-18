@@ -13,6 +13,3 @@ class TNet(nn.Module):
     def forward(self, x, z):
         x = torch.cat((x, z), dim=1)
         return self.net(x)
-
-    # def forward(self, x):
-    #     return self.net(x)

@@ -1,7 +1,6 @@
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
-from poison_data_generator.ResNet import ResNet18
 import torch.nn.functional as F
 import numpy as np
 from ffcv.writer import DatasetWriter
@@ -10,6 +9,7 @@ from typing import List
 import argparse
 import random
 from sample import get_Sample
+import os
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser()
@@ -19,8 +19,8 @@ parser.add_argument('--train_cleandata_path', type=str, default='data/clean_data
 parser.add_argument('--train_poisondata_path', type=str, default='data/poison_data.npz', help='Path to the training poison data')
 parser.add_argument('--output_path', type=str, default='sample_dataset.beton', help='Path to the output .beton file')
 parser.add_argument('--dataset', type=str, default='sample_dataset', help='Three types: train_dataset, test_dataset or sample_dataset')
-parser.add_argument('--sampling_datasize', type=int, default=4000, help='sampling_datasize')
-parser.add_argument('--observe_classes', type=list, default=[0,1,2], help='class')
+parser.add_argument('--sampling_datasize', type=int, default=3000, help='sampling_datasize')
+parser.add_argument('--observe_classes', type=list, default=[0,1,2,3,4,5,6,7,8,9], help='class')
 args = parser.parse_args()
 device = 'cpu'
 
@@ -64,7 +64,12 @@ def test_trainset(model):
     accuracy = correct_predictions / total_samples
     print("Overall test set accuracy:", accuracy)
 
-def label_to_prob(images, labels, cls, poison_count=None):
+# 定义钩子函数
+def hook(module, input, output):
+    global last_conv_output
+    last_conv_output = output
+    
+def label_to_prob(images, labels, cls):
     # 确保图像是 PyTorch 张量并且维度顺序是 (N, C, H, W)
     if isinstance(images, np.ndarray):
         images = torch.tensor(images).permute(0, 3, 1, 2).float()
@@ -76,9 +81,10 @@ def label_to_prob(images, labels, cls, poison_count=None):
     loader = DataLoader(dataset, batch_size=256, shuffle=False)
 
     # 加载预训练的ResNet18模型
-    model = ResNet18(num_classes=10)  # 指定类别数为10
-    model.conv1 = torch.nn.Conv2d(in_channels=3, out_channels=64, kernel_size=3, stride=1, padding=1, bias=False)
-    model.load_state_dict(torch.load('ResNet18_Cifar10_95.46/checkpoint/resnet18_cifar10.pt', map_location=device))
+    # model = ResNet18(num_classes=10)  # 指定类别数为10
+    # model.conv1 = torch.nn.Conv2d(in_channels=3, out_channels=64, kernel_size=3, stride=1, padding=1, bias=False)
+    # model.load_state_dict(torch.load('ResNet18_Cifar10_95.46/checkpoint/resnet18_cifar10.pt', map_location=device))
+    model = torch.load("results/ob_infoNCE_10_06_0.1/best_model.pth")
     model.to(device)
     model.eval()
     all_probabilities = []
@@ -94,15 +100,14 @@ def label_to_prob(images, labels, cls, poison_count=None):
     # 将所有概率拼接成一个数组
     all_probabilities = np.concatenate(all_probabilities, axis=0)
 
-    # 将最后 poison_count 个样本的概率设置为 [1,0,0,0,0,0,0,0,0,0]
-    if poison_count is not None:
-        all_probabilities[-poison_count:] = np.array([1,0,0,0,0,0,0,0,0,0])
-        # test_trainset(model)
-    else:
-        # 找出 all_probabilities 中 argmax 不等于 cls 的元素
-        incorrect_indices = np.argmax(all_probabilities, axis=1) != cls
-        # 将这些元素设置为 cls 的 one-hot 向量
-        all_probabilities[incorrect_indices] = np.eye(all_probabilities.shape[1])[cls]
+    # test_trainset(model)
+    # 找出 all_probabilities 中 argmax 不等于 cls 的元素
+    incorrect_indices = np.argmax(all_probabilities, axis=1) != cls
+    incorrect_count = np.sum(incorrect_indices)
+    print(f"Number of elements with argmax not equal to cls {cls}: {incorrect_count}")
+    print(f"Percentage of incorrect predictions: {incorrect_count / len(all_probabilities) * 100:.2f}%")
+    # 将这些元素设置为 cls 的 one-hot 向量
+    all_probabilities[incorrect_indices] = np.eye(all_probabilities.shape[1])[cls]
     print("all_probabilities.shape:", all_probabilities.shape)
     print("label:", torch.argmax(torch.tensor(all_probabilities), dim=1))
     return all_probabilities
@@ -119,31 +124,31 @@ def create_datasets():
         torch.tensor(test_data_npy['arr_1'], dtype=torch.long, device=device))
 
     sample_datasets = []
-    for cls in args.observe_classes:
-        observe_data_npy = training_data_npy['arr_0'][training_data_npy['arr_1'] == cls]
-        observe_label_npy = training_data_npy['arr_1'][training_data_npy['arr_1'] == cls]
-        print(f"cls_{cls}.len = {len(observe_label_npy)}")
+    # for cls in args.observe_classes:
+    #     observe_data_npy = training_data_npy['arr_0'][training_data_npy['arr_1'] == cls]
+    #     observe_label_npy = training_data_npy['arr_1'][training_data_npy['arr_1'] == cls]
+    #     print(f"cls_{cls}.len = {len(observe_label_npy)}")
 
-        data_label_pairs = list(zip(observe_data_npy, observe_label_npy))
-        random.shuffle(data_label_pairs)
-        train_data_label1_shuffled, train_label_label1_shuffled = zip(*data_label_pairs)
-        train_data_label1_sampled = np.array(random.sample(train_data_label1_shuffled, args.sampling_datasize))
-        train_label_label1_sampled = np.array(random.sample(train_label_label1_shuffled, args.sampling_datasize))
-        if cls == 0:
-            image_shuffle, label_shuffle, posion_count = get_Sample(args.sampling_datasize, args.train_cleandata_path,
-                                                    args.train_poisondata_path)
-            label_probs = label_to_prob(torch.tensor(image_shuffle, dtype=torch.float32, device=device).permute(0, 3, 1, 2),
-                                        torch.tensor(label_shuffle, dtype=torch.float32, device=device), cls, posion_count)
-            sample_dataset = TensorDataset(
-                torch.tensor(image_shuffle, dtype=torch.float32, device=device).permute(0, 3, 1, 2),
-                torch.tensor(label_probs, dtype=torch.float32, device=device))
-        else:
-            label_probs = label_to_prob(torch.tensor(train_data_label1_sampled, dtype=torch.float32, device=device).permute(0, 3, 1, 2),
-                                        torch.tensor(train_label_label1_sampled, dtype=torch.float32, device=device), cls)
-            sample_dataset = TensorDataset(
-                torch.tensor(train_data_label1_sampled, dtype=torch.float32, device=device).permute(0, 3, 1, 2),
-                torch.tensor(label_probs, dtype=torch.float32, device=device))
-        sample_datasets.append(sample_dataset)
+    #     data_label_pairs = list(zip(observe_data_npy, observe_label_npy))
+    #     random.shuffle(data_label_pairs)
+    #     train_data_label1_shuffled, train_label_label1_shuffled = zip(*data_label_pairs)
+    #     train_data_label1_sampled = np.array(random.sample(train_data_label1_shuffled, args.sampling_datasize))
+    #     train_label_label1_sampled = np.array(random.sample(train_label_label1_shuffled, args.sampling_datasize))
+    #     if cls == 0:
+    #         image_shuffle, label_shuffle = get_Sample(args.sampling_datasize, args.train_cleandata_path,
+    #                                                 args.train_poisondata_path)
+    #         label_probs = label_to_prob(torch.tensor(image_shuffle, dtype=torch.float32, device=device).permute(0, 3, 1, 2),
+    #                                     torch.tensor(label_shuffle, dtype=torch.float32, device=device), cls)
+    #         sample_dataset = TensorDataset(
+    #             torch.tensor(image_shuffle, dtype=torch.float32, device=device).permute(0, 3, 1, 2),
+    #             torch.tensor(label_probs, dtype=torch.float32, device=device))
+    #     else:
+    #         label_probs = label_to_prob(torch.tensor(train_data_label1_sampled, dtype=torch.float32, device=device).permute(0, 3, 1, 2),
+    #                                     torch.tensor(train_label_label1_sampled, dtype=torch.float32, device=device), cls)
+    #         sample_dataset = TensorDataset(
+    #             torch.tensor(train_data_label1_sampled, dtype=torch.float32, device=device).permute(0, 3, 1, 2),
+    #             torch.tensor(label_probs, dtype=torch.float32, device=device))
+    #     sample_datasets.append(sample_dataset)
     return train_dataset, test_dataset, sample_datasets
 
 def write_datasets(train_dataset=None, test_dataset=None, sample_datasets=None):
@@ -153,22 +158,27 @@ def write_datasets(train_dataset=None, test_dataset=None, sample_datasets=None):
             writer = DatasetWriter(class_write_path, {
                 'image': TorchTensorField(dtype=torch.float32, shape=(3, 32, 32)),
                 'label': TorchTensorField(dtype=torch.float32, shape=(10,))  # 修改为保存概率
+                # 'label': IntField()
             })
             writer.from_indexed_dataset(sample_dataset)
     if args.dataset == 'train_dataset' or args.dataset == 'all':
         writer = DatasetWriter(f"{args.output_path}/train_data.beton", {
             'image': TorchTensorField(dtype=torch.float32, shape=(3, 32, 32)),
+            # 'image': 'RGBImageField',
             'label': IntField()
         })
         writer.from_indexed_dataset(train_dataset)
     if args.dataset == 'test_dataset' or args.dataset == 'all':
         writer = DatasetWriter(f"{args.output_path}/test_data.beton", {
             'image': TorchTensorField(dtype=torch.float32, shape=(3, 32, 32)),
+            # 'image': 'RGBImageField',
             'label': IntField()
         })
         writer.from_indexed_dataset(test_dataset)
 
 if __name__ == "__main__":
+    if not os.path.exists(args.output_path):
+        os.makedirs(args.output_path)
     train_dataset, test_dataset, sample_datasets = create_datasets()
     if args.dataset == 'all':
         write_datasets(train_dataset, test_dataset, sample_datasets)
