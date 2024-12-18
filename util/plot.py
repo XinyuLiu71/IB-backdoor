@@ -5,7 +5,7 @@ import seaborn as sns
 import numpy as np
 import matplotlib.lines as mlines
 from openTSNE import TSNE
-from sklearn.metrics import silhouette_score, davies_bouldin_score
+from sklearn.metrics import silhouette_score, davies_bouldin_score, silhouette_samples
 
 def plot_and_save_mi(mi_values_dict, mode, output_dir, epoch):
     plt.figure(figsize=(12, 8))
@@ -62,23 +62,68 @@ def plot_train_loss_by_class(train_losses, epochs, num_classes, outputs_dir):
     plt.savefig(os.path.join(outputs_dir, 'train_loss_by_class_plot.png'))
     plt.close()
 
-def plot_tsne(t, labels, is_backdoor, epoch, outputs_dir, prefix='t'):
-    # 使用 t-SNE 降维
-    tsne = TSNE(n_components=2, random_state=42, n_jobs=16)
-    # t_tsne = tsne.fit_transform(t.cpu().numpy())
-    t_tsne = tsne.fit(t.cpu().numpy())
+from mpl_toolkits.mplot3d import Axes3D
 
-    # 计算指标
-    silhouette_avg = silhouette_score(t_tsne, labels)
-    davies_bouldin = davies_bouldin_score(t_tsne, labels)
+def plot_tsne_3d(t_tsne, labels, is_backdoor, epoch, outputs_dir, prefix='t'):
+    """
+    绘制 t-SNE 的三维可视化。
+    参数:
+    - t_tsne: t-SNE 降维后的表示 (n_samples, 3)
+    - labels: 样本的类别标签
+    - is_backdoor: 是否是 backdoor 数据的标记
+    - epoch: 当前 epoch
+    - outputs_dir: 图像保存路径
+    - prefix: 图像文件名前缀
+    """
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+
+    # 将 backdoor 数据标记为一个额外的类别
+    combined_labels = labels.copy()
+    combined_labels[is_backdoor == 1] = 10
+
+    # 定义颜色映射：0-9 类别 + backdoor 类别
+    palette = sns.color_palette("tab10", n_colors=10)
+    palette.append('red')  # 为 backdoor 添加红色
+
+    # 绘制 t-SNE 三维散点图
+    for i in range(11):  # 0-9 和 backdoor 类
+        indices = combined_labels == i
+        ax.scatter(t_tsne[indices, 0], t_tsne[indices, 1], t_tsne[indices, 2],
+                   color=palette[i], label=f'Class {i}' if i < 10 else 'Backdoor', s=15)
+
+    # 设置图表属性
+    ax.set_title(f"3D t-SNE Visualization at Epoch {epoch}", fontsize=14)
+    ax.set_xlabel("t-SNE Component 1", fontsize=12)
+    ax.set_ylabel("t-SNE Component 2", fontsize=12)
+    ax.set_zlabel("t-SNE Component 3", fontsize=12)
+
+    # 图例设置
+    ax.legend(loc='upper right', fontsize=10)
+
+    # 保存图像
+    plt.tight_layout()
+    plt.savefig(os.path.join(outputs_dir, f'tsne_3d_{prefix}_epoch_{epoch}.png'), dpi=300)
+    plt.close()
+    print(f"3D t-SNE plot saved to: tsne_3d_{prefix}_epoch_{epoch}.png")
+
+
+def plot_tsne(t_tsne, labels, is_backdoor, epoch, outputs_dir, prefix='t'):
+    # 使用 t-SNE 降维
+    # tsne = TSNE(n_components=2, random_state=42, n_jobs=16)
+    # # t_tsne = tsne.fit_transform(t.cpu().numpy())
+    # t_tsne = tsne.fit(t.cpu().numpy())
 
     # 绘制 t-SNE 图
     plt.figure(figsize=(10, 8))
 
     # 创建一个新的标签数组，将类别标签与是否是 backdoor 数据的标记结合
     # 将 backdoor 数据标记为 10（一个额外的类别），其他类别保留原标签
-    combined_labels = labels.cpu().numpy().copy()
-    combined_labels[is_backdoor.cpu().numpy() == 1] = 10  # 10 代表 backdoor 类别
+    
+    combined_labels = labels.copy()
+    combined_labels[is_backdoor == 1] = 10
+    # combined_labels = labels.cpu().numpy().copy()
+    # combined_labels[is_backdoor.cpu().numpy() == 1] = 10  # 10 代表 backdoor 类别
     
     # 创建一个颜色映射，0-9 是类别，10 是 backdoor
     palette = sns.color_palette("tab10", n_colors=10)  # 使用 10 个颜色表示 10 个类别
@@ -108,4 +153,115 @@ def plot_tsne(t, labels, is_backdoor, epoch, outputs_dir, prefix='t'):
     plt.savefig(os.path.join(outputs_dir, f'tsne_{prefix}_epoch_{epoch}.png'))
     plt.close()
 
-    return silhouette_avg, davies_bouldin
+
+def compute_single_class_metrics(t_tsne, labels, class_id):
+    """
+    计算单个类别的轮廓系数均值和类内紧凑性/类间分离度。
+
+    参数:
+    - t_tsne: t-SNE 降维后的表示 (n_samples, 2)
+    - labels: 所有样本的类别标签
+    - class_id: 目标类别的ID
+
+    返回:
+    - silhouette_mean: 目标类别的平均轮廓系数
+    - compactness: 类内紧凑性
+    - separation: 类间分离度
+    """
+    # Step 1: 计算全局的轮廓系数
+    silhouette_vals = silhouette_samples(t_tsne, labels)
+
+    # 提取目标类别的轮廓系数
+    class_indices = np.where(labels == class_id)[0]
+    silhouette_mean = np.mean(silhouette_vals[class_indices])
+    
+    # Step 2: 计算类内紧凑性
+    class_points = t_tsne[class_indices]
+    center_c = np.mean(class_points, axis=0)
+    compactness = np.mean(np.linalg.norm(class_points - center_c, axis=1))
+    
+    # Step 3: 计算类间分离度
+    unique_classes = np.unique(labels)
+    separations = []
+    for other_class in unique_classes:
+        if other_class != class_id:
+            other_indices = np.where(labels == other_class)[0]
+            center_j = np.mean(t_tsne[other_indices], axis=0)
+            separation = np.linalg.norm(center_c - center_j)
+            separations.append(separation)
+    separation_min = min(separations)  # 选择到其他簇的最小距离
+    
+    # 返回结果
+    return silhouette_mean, compactness/separation_min
+
+
+
+def analyze_and_visualize(data, labels, is_backdoor, epoch, outputs_dir, prefix='t'):
+    """
+    主函数，执行 t-SNE 降维、计算聚类指标并绘制可视化图。
+    
+    参数:
+    - t: 原始特征表示 (Tensor)
+    - labels: 样本的类别标签 (Tensor)
+    - is_backdoor: 是否是 backdoor 数据的标记 (Tensor)
+    - epoch: 当前 epoch
+    - outputs_dir: 图像保存路径
+    - prefix: 图像文件名前缀
+    """
+    # 转换数据为 numpy 格式
+    labels_np = labels.cpu().numpy()
+    is_backdoor_np = is_backdoor.cpu().numpy()
+
+    # 使用 t-SNE 降维
+    tsne = TSNE(n_components=2, random_state=42, n_jobs=16)
+    # t_tsne = tsne.fit_transform(t.cpu().numpy())
+    t_tsne = tsne.fit(data.cpu().numpy())
+
+    if epoch == 60 or epoch == 120:
+        np.save(os.path.join(outputs_dir, f'tsne_{prefix}_epoch_{epoch}.npy'), t_tsne)
+        np.save(os.path.join(outputs_dir, f'labels_{prefix}_epoch_{epoch}.npy'), labels_np)
+        np.save(os.path.join(outputs_dir, f'is_backdoor_{prefix}_epoch_{epoch}.npy'), is_backdoor_np)
+
+    # 计算每个类别的指标
+    metrics = {}
+    # Step 1: 计算全局的轮廓系数
+    # silhouette_vals = silhouette_samples(t_tsne, labels_np)
+
+    print("### Per-Class Clustering Metrics ###")
+    for class_id in range(10):
+        # 提取目标类别的轮廓系数
+        class_indices = np.where(labels_np == class_id)[0]
+        # silhouette_mean = np.mean(silhouette_vals[class_indices])
+        # metrics[class_id] = silhouette_mean
+        # print(f"Class {class_id} {prefix} silhouette: {silhouette_mean:.4f}")
+        class_points = t_tsne[class_indices]
+        center_c = np.mean(class_points, axis=0)
+        compactness = np.mean(np.linalg.norm(class_points - center_c, axis=1))
+        metrics[class_id] = compactness
+        print(f"Class {class_id} {prefix} compactness: {compactness:.4f}")
+
+    # 计算类别 0 中 clean 和 backdoor 数据的指标
+    print("### Class 0 Subgroup Metrics ###")
+    class0_clean_indices = np.where((labels_np == 0) & (is_backdoor_np == 0))[0]
+    class0_backdoor_indices = np.where((labels_np == 0) & (is_backdoor_np == 1))[0]
+    # silhouette_clean = np.mean(silhouette_vals[class0_clean_indices])
+    # silhouette_backdoor = np.mean(silhouette_vals[class0_backdoor_indices])
+    # metrics['0_clean'] = silhouette_clean
+    # metrics['0_backdoor'] = silhouette_backdoor
+    # print(f"Class 0 Clean {prefix} silhouette: {silhouette_clean:.4f}")
+    # print(f"Class 0 Backdoor {prefix} silhouette: {silhouette_backdoor:.4f}")
+    class0_clean_points = t_tsne[class0_clean_indices]
+    class0_backdoor_points = t_tsne[class0_backdoor_indices]
+    center_clean = np.mean(class0_clean_points, axis=0)
+    center_backdoor = np.mean(class0_backdoor_points, axis=0)
+    compactness_clean = np.mean(np.linalg.norm(class0_clean_points - center_clean, axis=1))
+    compactness_backdoor = np.mean(np.linalg.norm(class0_backdoor_points - center_backdoor, axis=1))
+    metrics['0_clean'] = compactness_clean
+    metrics['0_backdoor'] = compactness_backdoor
+    print(f"Class 0 Clean {prefix} compactness: {compactness_clean:.4f}")
+    print(f"Class 0 Backdoor {prefix} compactness: {compactness_backdoor:.4f}")
+
+    # 绘制 t-SNE 图
+    # plot_tsne(t_tsne, labels_np, is_backdoor_np, epoch, outputs_dir, prefix)
+    plot_tsne_3d(t_tsne, labels_np, is_backdoor_np, epoch, outputs_dir, prefix)
+    return metrics
