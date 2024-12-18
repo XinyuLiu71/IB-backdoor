@@ -1,0 +1,2 @@
+noise XT: 0.6*2
+noise TY: 1.0

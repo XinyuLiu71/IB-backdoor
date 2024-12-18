@@ -1,0 +1,9 @@
+epoch 70 -> soft label
+I(T;Y):
+class 0: max 0.25
+others: max 0.12
+
+I(X;T):
+diffs变小
+class0: max 3.5
+others: max 2.8
