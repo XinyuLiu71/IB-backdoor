@@ -354,22 +354,22 @@ def train(args, flag='inputs-vs-outputs', mode='infoNCE'):
         class_losses_list.append(class_losses)
 
         # Visualize t using t-SNE
-        if epoch in [5, 10, 20, 40, 60, 80, 100, 120]:
+        if epoch in [5, 10, 20, 40, 60, 80, 120]:
             # plot_tsne(t, labels, is_backdoor, epoch, args.outputs_dir)
             # plot_tsne(preds, labels, is_backdoor, epoch, args.outputs_dir, prefix='preds')
             metrics_t = analyze_and_visualize(t, labels, is_backdoor, epoch, args.outputs_dir, prefix='t')
-            metrics_pred = analyze_and_visualize(preds, labels, is_backdoor, epoch, args.outputs_dir, prefix='preds')
+            # metrics_pred = analyze_and_visualize(preds, labels, is_backdoor, epoch, args.outputs_dir, prefix='preds')
             for class_idx, metric in metrics_t.items():
                 metrics_t_dict[class_idx].append(metric)
-            for class_idx, metric in metrics_pred.items():
-                metrics_pred_dict[class_idx].append(metric)
+            # for class_idx, metric in metrics_pred.items():
+            #     metrics_pred_dict[class_idx].append(metric)
 
             np.save(f'{args.outputs_dir}/metrics_t.npy', metrics_t_dict)
-            np.save(f'{args.outputs_dir}/metrics_pred.npy', metrics_pred_dict)
+            # np.save(f'{args.outputs_dir}/metrics_pred.npy', metrics_pred_dict)
 
             wandb.log({
                 "metrics_t": metrics_t,
-                "metrics_pred": metrics_pred
+                # "metrics_pred": metrics_pred
                 },step=epoch)
             
         # 创建一个包含所有类别损失的图表
