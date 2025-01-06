@@ -47,7 +47,7 @@ pipelines = {
         'image': image_pipeline,
         'label': label_pipeline
     }
-test_dataloader_path = "data/badnet_/0.1/observe_data_class_2.beton"
+test_dataloader_path = "data/badnet/0.1/train_data_class_2.beton"
 test_dataloader = Loader(test_dataloader_path, batch_size=256, num_workers=16,
                             order=OrderOption.RANDOM, pipelines=pipelines)
 # 从数据加载器中获取所有数据
