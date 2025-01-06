@@ -6,6 +6,8 @@ import numpy as np
 import matplotlib.lines as mlines
 from openTSNE import TSNE
 from sklearn.metrics import silhouette_score, davies_bouldin_score, silhouette_samples
+from mpl_toolkits.mplot3d import Axes3D
+
 
 def plot_and_save_mi(mi_values_dict, mode, output_dir, epoch):
     plt.figure(figsize=(12, 8))
@@ -176,23 +178,24 @@ def compute_single_class_metrics(t_tsne, labels, class_id):
     silhouette_mean = np.mean(silhouette_vals[class_indices])
     
     # Step 2: 计算类内紧凑性
-    class_points = t_tsne[class_indices]
-    center_c = np.mean(class_points, axis=0)
-    compactness = np.mean(np.linalg.norm(class_points - center_c, axis=1))
+    # class_points = t_tsne[class_indices]
+    # center_c = np.mean(class_points, axis=0)
+    # compactness = np.mean(np.linalg.norm(class_points - center_c, axis=1))
     
-    # Step 3: 计算类间分离度
-    unique_classes = np.unique(labels)
-    separations = []
-    for other_class in unique_classes:
-        if other_class != class_id:
-            other_indices = np.where(labels == other_class)[0]
-            center_j = np.mean(t_tsne[other_indices], axis=0)
-            separation = np.linalg.norm(center_c - center_j)
-            separations.append(separation)
-    separation_min = min(separations)  # 选择到其他簇的最小距离
+    # # Step 3: 计算类间分离度
+    # unique_classes = np.unique(labels)
+    # separations = []
+    # for other_class in unique_classes:
+    #     if other_class != class_id:
+    #         other_indices = np.where(labels == other_class)[0]
+    #         center_j = np.mean(t_tsne[other_indices], axis=0)
+    #         separation = np.linalg.norm(center_c - center_j)
+    #         separations.append(separation)
+    # separation_min = min(separations)  # 选择到其他簇的最小距离
     
     # 返回结果
-    return silhouette_mean, compactness/separation_min
+    # return silhouette_mean, compactness/separation_min
+    return silhouette_mean
 
 
 
@@ -214,7 +217,7 @@ def analyze_and_visualize(data, labels, is_backdoor, epoch, outputs_dir, prefix=
 
     # 使用 t-SNE 降维
     tsne = TSNE(n_components=2, random_state=42, n_jobs=16)
-    # t_tsne = tsne.fit_transform(t.cpu().numpy())
+    # t_tsne = tsne.fit_transform(data.cpu().numpy())
     t_tsne = tsne.fit(data.cpu().numpy())
 
     if epoch == 60 or epoch == 120:
@@ -225,43 +228,53 @@ def analyze_and_visualize(data, labels, is_backdoor, epoch, outputs_dir, prefix=
     # 计算每个类别的指标
     metrics = {}
     # Step 1: 计算全局的轮廓系数
-    # silhouette_vals = silhouette_samples(t_tsne, labels_np)
+    silhouette_vals = silhouette_samples(t_tsne, labels_np)
 
     print("### Per-Class Clustering Metrics ###")
     for class_id in range(10):
         # 提取目标类别的轮廓系数
         class_indices = np.where(labels_np == class_id)[0]
-        # silhouette_mean = np.mean(silhouette_vals[class_indices])
-        # metrics[class_id] = silhouette_mean
-        # print(f"Class {class_id} {prefix} silhouette: {silhouette_mean:.4f}")
-        class_points = t_tsne[class_indices]
-        center_c = np.mean(class_points, axis=0)
-        compactness = np.mean(np.linalg.norm(class_points - center_c, axis=1))
-        metrics[class_id] = compactness
-        print(f"Class {class_id} {prefix} compactness: {compactness:.4f}")
+        silhouette_mean = np.mean(silhouette_vals[class_indices])
+        metrics[class_id] = silhouette_mean
+        print(f"Class {class_id} {prefix} silhouette: {silhouette_mean:.4f}")
+
+        # class_points = t_tsne[class_indices]
+        # center_c = np.mean(class_points, axis=0)
+        # compactness = np.mean(np.linalg.norm(class_points - center_c, axis=1))
+        # metrics[class_id] = compactness
+        # print(f"Class {class_id} {prefix} compactness: {compactness:.4f}")
 
     # 计算类别 0 中 clean 和 backdoor 数据的指标
     print("### Class 0 Subgroup Metrics ###")
-    class0_clean_indices = np.where((labels_np == 0) & (is_backdoor_np == 0))[0]
-    class0_backdoor_indices = np.where((labels_np == 0) & (is_backdoor_np == 1))[0]
-    # silhouette_clean = np.mean(silhouette_vals[class0_clean_indices])
-    # silhouette_backdoor = np.mean(silhouette_vals[class0_backdoor_indices])
-    # metrics['0_clean'] = silhouette_clean
-    # metrics['0_backdoor'] = silhouette_backdoor
-    # print(f"Class 0 Clean {prefix} silhouette: {silhouette_clean:.4f}")
-    # print(f"Class 0 Backdoor {prefix} silhouette: {silhouette_backdoor:.4f}")
-    class0_clean_points = t_tsne[class0_clean_indices]
-    class0_backdoor_points = t_tsne[class0_backdoor_indices]
-    center_clean = np.mean(class0_clean_points, axis=0)
-    center_backdoor = np.mean(class0_backdoor_points, axis=0)
-    compactness_clean = np.mean(np.linalg.norm(class0_clean_points - center_clean, axis=1))
-    compactness_backdoor = np.mean(np.linalg.norm(class0_backdoor_points - center_backdoor, axis=1))
-    metrics['0_clean'] = compactness_clean
-    metrics['0_backdoor'] = compactness_backdoor
-    print(f"Class 0 Clean {prefix} compactness: {compactness_clean:.4f}")
-    print(f"Class 0 Backdoor {prefix} compactness: {compactness_backdoor:.4f}")
+    # 将 backdoor 和 clean 作为独立类别
+    extended_labels = labels_np.copy()
+    extended_labels[(labels_np == 0) & (is_backdoor_np == 0)] = 10  # clean -> 类别 10
+    extended_labels[(labels_np == 0) & (is_backdoor_np == 1)] = 11  # backdoor -> 类别 11
+    silhouette_vals = silhouette_samples(t_tsne, extended_labels)
+
+    class0_clean_indices = np.where(extended_labels==10)[0]
+    class0_backdoor_indices = np.where(extended_labels==11)[0]
+
+    silhouette_clean = np.mean(silhouette_vals[class0_clean_indices])
+    silhouette_backdoor = np.mean(silhouette_vals[class0_backdoor_indices])
+
+    metrics['0_clean'] = silhouette_clean
+    metrics['0_backdoor'] = silhouette_backdoor
+    
+    print(f"Class 0 Clean {prefix} silhouette: {silhouette_clean:.4f}")
+    print(f"Class 0 Backdoor {prefix} silhouette: {silhouette_backdoor:.4f}")
+    # class0_clean_points = t_tsne[class0_clean_indices]
+    # class0_backdoor_points = t_tsne[class0_backdoor_indices]
+    # center_clean = np.mean(class0_clean_points, axis=0)
+    # center_backdoor = np.mean(class0_backdoor_points, axis=0)
+    # compactness_clean = np.mean(np.linalg.norm(class0_clean_points - center_clean, axis=1))
+    # compactness_backdoor = np.mean(np.linalg.norm(class0_backdoor_points - center_backdoor, axis=1))
+    # metrics['0_clean'] = compactness_clean
+    # metrics['0_backdoor'] = compactness_backdoor
+    # print(f"Class 0 Clean {prefix} compactness: {compactness_clean:.4f}")
+    # print(f"Class 0 Backdoor {prefix} compactness: {compactness_backdoor:.4f}")
 
     # 绘制 t-SNE 图
-    # plot_tsne(t_tsne, labels_np, is_backdoor_np, epoch, outputs_dir, prefix)
-    plot_tsne_3d(t_tsne, labels_np, is_backdoor_np, epoch, outputs_dir, prefix)
+    plot_tsne(t_tsne, labels_np, is_backdoor_np, epoch, outputs_dir, prefix)
+    # plot_tsne_3d(t_tsne, labels_np, is_backdoor_np, epoch, outputs_dir, prefix)
     return metrics
