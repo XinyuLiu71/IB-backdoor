@@ -4,6 +4,9 @@ import seaborn as sns
 import os
 import matplotlib.lines as mlines
 
+# 设置字体为 Times New Roman
+plt.rcParams["font.family"] = "Times New Roman"
+
 def plot_tsne(t_tsne, labels, is_backdoor, epoch, outputs_dir, prefix='t'):
     # 设置配色：使用 muted 颜色
     palette = sns.color_palette("muted", n_colors=10)  # 10个类
@@ -19,48 +22,51 @@ def plot_tsne(t_tsne, labels, is_backdoor, epoch, outputs_dir, prefix='t'):
         x=t_tsne[:, 0], y=t_tsne[:, 1], 
         hue=combined_labels, 
         palette=palette, 
-        s=20,  # 点大小
-        # alpha=0.8,  # 透明度
-        edgecolor=None  # 去除点边框
+        s=40,  # 调整点大小
+        alpha=0.8,  # 设置点透明度
+        edgecolor=None,  # 去除点边框
+        legend=False  # 去除图例
     )
     
-    # 设置标题和坐标轴字体大小
-    # plt.title(f"t-SNE of {prefix} at Epoch {epoch}", fontsize=18)
-    # plt.xlabel("t-SNE Component 1", fontsize=16)
-    # plt.ylabel("t-SNE Component 2", fontsize=16)
-    plt.xticks(fontsize=16)
-    plt.yticks(fontsize=16)
+    # 设置坐标轴字体大小
+    plt.xticks(fontsize=45)
+    plt.yticks(fontsize=45)
     plt.grid(True, linestyle='--', alpha=0.5)
 
     # 自定义图例
-    legend_labels = [f'Class {i}' for i in range(10)] + ['Backdoor']
+    legend_labels = [str(i) for i in range(10)] + ['Backdoor']  # 移除 "Class"
     custom_lines = [mlines.Line2D([0], [0], marker='o', color='w', 
-                                  markerfacecolor=palette[i], markersize=10) for i in range(10)]
+                                  markerfacecolor=palette[i], markersize=20) for i in range(10)]
     custom_lines.append(mlines.Line2D([0], [0], marker='o', color='w', 
-                                      markerfacecolor='red', markersize=10))
+                                      markerfacecolor='red', markersize=20))
 
-    # 调整图例位置和字体大小
+    # 调整图例位置为多行多列
     plt.legend(
         handles=custom_lines, 
         labels=legend_labels, 
-        title="Class", 
-        loc="upper right", 
-        fontsize=12, 
-        title_fontsize=14, 
+        loc="lower center",  # 图例放置在图形下方
+        # bbox_to_anchor=(0.5, -0.2),  # 图例的位置偏移
+        ncol=4,  # 设置为 6 列
+        fontsize=40,  # 图例字体大小
         frameon=True, 
-        # shadow=False
+        fancybox=True,  # 圆角边框
+        shadow=False,  # 无阴影
+        columnspacing=0.1,  # 列间距
+        handletextpad=0.1,  # 线条与文字的间距
+        labelspacing=0.1  # 图例项之间的间距
     )
 
     # 保存图像
     save_path = os.path.join(outputs_dir, f'tsne_{prefix}_epoch_{epoch}_improved.png')
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.savefig(save_path.replace('.png', '.pdf'), dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"Improved t-SNE plot saved to: {save_path}")
+    print(f"Adjusted t-SNE plot saved to: {save_path}")
 
 # 输入参数
 prefix = 't'
-epoch = 120
-outputs_dir = 'results/wanet/ob_infoNCE_12_18_0.1_0.5+0.6'
+epoch = 5
+outputs_dir = 'results/label_consistent/ob_infoNCE_13_8_0.25_0.4+0.4'
 
 # 加载数据
 t_tsne = np.load(os.path.join(outputs_dir, f'tsne_{prefix}_epoch_{epoch}.npy'))

@@ -43,14 +43,11 @@ def calculate_normalized_mi_difference(MI_dict, target_class, other_classes, sel
         combined_mis = [target_mi_epoch] + other_mis_epoch
         max_mi = np.max(combined_mis)
         min_mi = np.min(combined_mis)
-        # print(f"max_mi: {max_mi}, min_mi: {min_mi}")
-        # print(f"before target_mi_epoch: {target_mi_epoch} other_mis_epoch: {other_mis_epoch}")
         target_mi_epoch = (target_mi_epoch - min_mi) / (max_mi - min_mi + 1e-8)
         other_mis_epoch = [
             (mi - min_mi) / (max_mi - min_mi + 1e-8)
             for mi in other_mis_epoch
         ]
-        # print(f"after target_mi_epoch: {target_mi_epoch} other_mis_epoch: {other_mis_epoch}")
         # 计算目标类别与每个其他类别的归一化 MI 差值
         differences_epoch = target_mi_epoch - np.array(other_mis_epoch)
         differences.append(np.abs(np.mean(differences_epoch)))  # 保存每个 epoch 的平均差值
@@ -63,14 +60,14 @@ def calculate_normalized_mi_difference(MI_dict, target_class, other_classes, sel
 
 if __name__ == "__main__":
     # 设置路径
-    dir = "results/blend/ob_infoNCE_11_32_0.1_0.4+0.4"
+    dir = "results/label_consistent/ob_infoNCE_13_8_0.25_0.4+0.4"
     epochs = generate_epochs_from_files(dir)
 
     # 加载 MI 数据
     MI_inputs_vs_outputs = np.load(f"{dir}/infoNCE_MI_I(X,T).npy", allow_pickle=True).item()
     MI_Y_vs_outputs = np.load(f"{dir}/infoNCE_MI_I(Y,T).npy", allow_pickle=True).item()
 
-    dir2 = "results/blend/ob_infoNCE_12_01_0.1_0.4+0.4"
+    dir2 = "results/label_consistent/ob_infoNCE_13_8_0.25_0.4+0.4_4-9"
     MI_inputs_vs_outputs2 = np.load(f"{dir2}/infoNCE_MI_I(X,T).npy", allow_pickle=True).item()
     MI_Y_vs_outputs2 = np.load(f"{dir2}/infoNCE_MI_I(Y,T).npy", allow_pickle=True).item()
 
@@ -79,33 +76,43 @@ if __name__ == "__main__":
 
     # 定义目标类别和其他干净类别
     target_clean = "0_clean"  # 类 0 clean 数据
-    target_sample = 0  # 类 0 数据
+    target_backdoor = "0_backdoor"  # 类 0 数据
     other_classes = [cls for cls in MI_inputs_vs_outputs.keys() if isinstance(cls, int) and cls != 0]  # 干净类别
 
     # 选择的 epoch
-    selected_epochs = [5, 40, 100]  # 第1、40和最后一个 epoch
+    # selected_epochs = [1, 5, 40, 120] 
+    selected_epochs = [1, 5, 120]
+    # selected_epochs = [5, 40, 120]
     selected_epochs_index = [epochs.index(epoch) for epoch in selected_epochs]
 
     # 计算类 0 clean 和其他干净类别的 I(X;T) 差值平均
     avg_diff_xt_clean = calculate_normalized_mi_difference(MI_inputs_vs_outputs, target_clean, other_classes, selected_epochs_index)
     print(f"I(X;T) 类 0 clean 和其他类别的 MI 差值平均 (normalized): {avg_diff_xt_clean:.4f}")
 
-    # 计算类 0 sample 和其他干净类别的 MI 差值平均
-    avg_diff_xt_sample = calculate_normalized_mi_difference(MI_inputs_vs_outputs, target_sample, other_classes, selected_epochs_index)
-    print(f"I(X;T) 类 0 和其他类别的 MI 差值平均 (normalized): {avg_diff_xt_sample:.4f}")
+    # 计算类 0 backdoor 和其他干净类别的 MI 差值平均
+    avg_diff_xt_backdoor = calculate_normalized_mi_difference(MI_inputs_vs_outputs, target_backdoor, other_classes, selected_epochs_index)
+    print(f"I(X;T) 类 0 backdoor 和其他类别的 MI 差值平均 (normalized): {avg_diff_xt_backdoor:.4f}")
+
+    # 计算类 0 和其他干净类别的 I(X;T) 差值平均
+    avg_diff_xt_total = calculate_normalized_mi_difference(MI_inputs_vs_outputs, 0, other_classes, selected_epochs_index)
+    print(f"I(X;T) 类 0 和其他类别的 MI 差值平均 (normalized): {avg_diff_xt_total:.4f}")
 
     # 计算类 0 clean 和其他干净类别的I(T;Y) 差值平均
     avg_diff_ty_clean = calculate_normalized_mi_difference(MI_Y_vs_outputs, target_clean, other_classes, selected_epochs_index)
     print(f"I(T;Y) 类 0 clean 和其他类别的 MI 差值平均 (normalized): {avg_diff_ty_clean:.4f}")
 
-    # 计算类 0 sample 和其他干净类别的 MI 差值平均
-    avg_diff_ty_sample = calculate_normalized_mi_difference(MI_Y_vs_outputs, target_sample, other_classes, selected_epochs_index)
-    print(f"I(T;Y) 类 0 和其他类别的 MI 差值平均 (normalized): {avg_diff_ty_sample:.4f}")
+    # 计算类 0 backdoor 和其他干净类别的 I(T;Y) 差值平均
+    avg_diff_ty_backdoor = calculate_normalized_mi_difference(MI_Y_vs_outputs, target_backdoor, other_classes, selected_epochs_index)
+    print(f"I(T;Y) 类 0 backdoor 和其他类别的 MI 差值平均 (normalized): {avg_diff_ty_backdoor:.4f}")
+
+    # 计算类 0 和其他干净类别的 I(T;Y) 差值平均
+    avg_diff_ty_total = calculate_normalized_mi_difference(MI_Y_vs_outputs, 0, other_classes, selected_epochs_index)
+    print(f"I(T;Y) 类 0 和其他类别的 MI 差值平均 (normalized): {avg_diff_ty_total:.4f}")
 
     # 总体 MI 差值
-    avg_diff_total_xt = np.abs(avg_diff_xt_clean) + np.abs(avg_diff_xt_sample)
+    avg_diff_total_xt = np.abs(avg_diff_xt_clean) + np.abs(avg_diff_xt_backdoor) + np.abs(avg_diff_xt_total)
     print(f"I(X;T) 总体差值：{avg_diff_total_xt:.4f}")
-    avg_diff_total_ty = np.abs(avg_diff_ty_clean) + np.abs(avg_diff_ty_sample)
+    avg_diff_total_ty = np.abs(avg_diff_ty_clean) + np.abs(avg_diff_ty_backdoor) + np.abs(avg_diff_ty_total)
     print(f"I(T;Y) 总体差值：{avg_diff_total_ty:.4f}")
-    avg_diff_total = np.abs(avg_diff_xt_clean) + np.abs(avg_diff_xt_sample) + np.abs(avg_diff_ty_clean) + np.abs(avg_diff_ty_sample)
+    avg_diff_total = avg_diff_total_xt + avg_diff_total_ty
     print(f"总体 MI 差值 (normalized): {avg_diff_total:.4f}")
