@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.nn import functional as F
 import math
+from mpl_toolkits.axes_grid1.inset_locator import zoomed_inset_axes, mark_inset
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -19,7 +20,7 @@ def compute_DV(T, Y, Z_, t):
     e_t2_ema = None
     t2 = T(Y, Z_)
     e_t2 = t2.exp()
-    e_t2 = e_t2.clamp(max=1e20)
+    e_t2 = e_t2.clamp(max=1e30)
     e_t2_mean = e_t2.mean()
     if e_t2_ema is None:
         loss = -(t.mean() - e_t2_mean.log())
@@ -41,7 +42,7 @@ def stable_log_sum_exp(logits, dim=1):
     stable_logits = logits - max_logits
     log_sum_exp = (stable_logits.exp().mean(dim=dim)).log() + max_logits.squeeze(dim)
     return log_sum_exp
-# def compute_infoNCE(T, Y, Z, t, num_negative_samples=256):
+# def compute_infoNCE(T, Y, Z, t, num_negative_samples=306):
 #     batch_size = Y.shape[0]
     
 #     # 随机选择负样本
@@ -94,7 +95,7 @@ def compute_infoNCE(T, Y, Z, t, num_negative_samples=512, batch_size=128):
     
     return loss
 
-# def compute_infoNCE(T, Y, Z, t, num_negative_samples=200):
+# def compute_infoNCE(T, Y, Z, t, num_negative_samples=300):
 #     batch_size = Y.shape[0]
     
 #     # 随机选择负样本
@@ -161,77 +162,108 @@ mi_values_infonce = []
 mi_values_mine = []
 real_mi_values = [real_mi] * EPOCHS  # 真实互信息在所有训练epoch中保持不变
 
-for epoch in range(EPOCHS):
-    print(f"Epoch {epoch + 1}/{EPOCHS}")
-    Z_ = X_torch[torch.randperm(X_torch.size(0))]  # 生成打乱后的 Z_
+# for epoch in range(EPOCHS):
+#     print(f"Epoch {epoch + 1}/{EPOCHS}")
+#     Z_ = X_torch[torch.randperm(X_torch.size(0))]  # 生成打乱后的 Z_
 
-    # InfoNCE训练
-    optimizer_infonce.zero_grad()
+#     # InfoNCE训练
+#     optimizer_infonce.zero_grad()
 
-    num_negative_samples = 512
-    t_infonce = T_infonce(Y_torch, X_torch)
-    loss_infonce = compute_infoNCE(T_infonce, Y_torch, X_torch, t_infonce, num_negative_samples=num_negative_samples)
+#     num_negative_samples = 512
+#     t_infonce = T_infonce(Y_torch, X_torch)
+#     loss_infonce = compute_infoNCE(T_infonce, Y_torch, X_torch, t_infonce, num_negative_samples=num_negative_samples)
 
-    loss_infonce.backward()
-    optimizer_infonce.step()
+#     loss_infonce.backward()
+#     optimizer_infonce.step()
     
-    # mi_infonce = t_infonce.mean().item() - t2.mean().item()
-    mi_infonce = -loss_infonce.item() + math.log(num_negative_samples+1)
-    mi_values_infonce.append(mi_infonce)
+#     # mi_infonce = t_infonce.mean().item() - t2.mean().item()
+#     mi_infonce = -loss_infonce.item() + math.log(num_negative_samples+1)
+#     mi_values_infonce.append(mi_infonce)
 
-    # 更新学习率
-    scheduler_infonce.step(mi_infonce)
+#     # 更新学习率
+#     scheduler_infonce.step(mi_infonce)
 
-    # MINE训练
-    optimizer_mine.zero_grad()
+#     # MINE训练
+#     optimizer_mine.zero_grad()
 
-    t_mine = T_mine(Y_torch, X_torch)  # 计算联合分布样本的得分    
-    _, e_t2_mine, loss_mine = compute_DV(T_mine, Y_torch, Z_, t_mine)
+#     t_mine = T_mine(Y_torch, X_torch)  # 计算联合分布样本的得分    
+#     _, e_t2_mine, loss_mine = compute_DV(T_mine, Y_torch, Z_, t_mine)
 
-    loss_mine.backward()
-    torch.nn.utils.clip_grad_norm_(T_mine.parameters(), max_norm=1.0)  # Gradient clipping
-    optimizer_mine.step()
+#     loss_mine.backward()
+#     torch.nn.utils.clip_grad_norm_(T_mine.parameters(), max_norm=1.0)  # Gradient clipping
+#     optimizer_mine.step()
 
-    mi_mine = t_mine.mean().item() - e_t2_mine.mean().log().item()
-    mi_values_mine.append(mi_mine)
+#     mi_mine = t_mine.mean().item() - e_t2_mine.mean().log().item()
+#     mi_values_mine.append(mi_mine)
 
-    # 更新学习率
-    scheduler_mine.step(mi_mine)
+#     # 更新学习率
+#     scheduler_mine.step(mi_mine)
 
-    print(f'InfoNCE MI: {mi_infonce:.4f}, MINE MI: {mi_mine:.4f}')
+#     print(f'InfoNCE MI: {mi_infonce:.4f}, MINE MI: {mi_mine:.4f}')
 
+# np.save('mi_values_infonce.npy', mi_values_infonce)
+# np.save('mi_values_mine.npy', mi_values_mine)
 
+mi_values_infonce = np.load('mi_values_infonce.npy')
+mi_values_mine = np.load('mi_values_mine.npy')
 
 # 绘制MI估计曲线
 epochs = range(1, EPOCHS + 1)
 
-plt.figure(figsize=(10, 6))
-plt.plot(epochs, mi_values_infonce, label='InfoNCE MI', linestyle='-.', linewidth=2)
-plt.plot(epochs, mi_values_mine, label='MINE MI', linestyle='-', linewidth=2)
-plt.plot(epochs, real_mi_values, label='Real MI', linestyle='--', linewidth=2)
+# 设置字体为 Times New Roman
+plt.rcParams["font.family"] = "Times New Roman"
+# 绘制主图
 
-# 设置字体大小
-plt.xlabel('Training Epoch', fontsize=10)
-plt.ylabel('Mutual Information', fontsize=10)
-# plt.title('Comparison of Mutual Information Estimation: InfoNCE vs MINE', fontsize=10)
-plt.legend(fontsize=10)
+plt.figure(figsize=(12, 8))
+plt.plot(epochs, mi_values_infonce, label='InfoNCE MI', linestyle='-', linewidth=4, color='#1f77b4')  # 蓝色
+plt.plot(epochs, mi_values_mine, label='MINE MI', linestyle='--', linewidth=4, color='#ff7f0e')  # 橙色
+plt.plot(epochs, real_mi_values, label='Real MI', linestyle='-.', linewidth=4, color='#2ca02c')  # 绿色
 
-# 设置刻度字体大小
-plt.xticks(fontsize=10)
-plt.yticks(fontsize=10)
+# 设置标题和坐标轴标签
+plt.xlabel('Epochs', fontsize=30)
+plt.ylabel('Mutual Information', fontsize=30)
+# plt.title('Comparison of Mutual Information Estimation: InfoNCE vs MINE', fontsize=16)
 
-# 设置背景阴影颜色
+# 调整字体大小
+plt.xticks(fontsize=30)
+plt.yticks(fontsize=30)
+
+# 图例设置
+plt.legend(fontsize=30, loc='lower right')
+
+# 设置背景颜色
 ax = plt.gca()
-ax.set_facecolor('#f0f0f0')  # 浅灰色背景
-ax.patch.set_alpha(0.9)      # 背景透明度
+# ax.set_facecolor('#f9f9f9')  # 浅灰色背景
+ax.set_facecolor('#f2f2f2')  # 浅灰色背景
+ax.grid(color='white', linestyle='-', linewidth=4, alpha=0.8)  # 白色网格线
+ax.patch.set_alpha(0.95)     # 背景透明度
 
-# 设置网格线为白色
-plt.grid(True, color='white', linestyle='-', linewidth=1.2, alpha=1)
-# plt.axhline(0, color='gray', linestyle='-', linewidth=0.8, alpha=0.8)  # 水平轴突出显示
-# plt.axvline(0, color='gray', linestyle='-', linewidth=0.8, alpha=0.8)  # 垂直轴突出显示
+# 添加局部放大图
+axins = zoomed_inset_axes(ax, zoom=4, loc='center right')  # 放大倍率为4
+axins.plot(epochs, mi_values_infonce, linestyle='-', linewidth=3, color='#1f77b4')
+axins.plot(epochs, mi_values_mine, linestyle='--', linewidth=3, color='#ff7f0e')
+axins.plot(epochs, real_mi_values, linestyle='-.', linewidth=3, color='#2ca02c')
 
+# 设置放大区域的范围（例如最后30个epoch）
+x_start, x_end = len(epochs) - 50, len(epochs)  # 调整范围
+axins.set_xlim(epochs[x_start], epochs[x_end-1])
+axins.set_ylim(2.7, 2.95)  # 调整放大图的Y轴范围
+
+# 移除放大图的网格线以避免视觉干扰
+axins.grid(False)
+
+# 标注放大区域
+mark_inset(ax, axins, loc1=2, loc2=4, fc="none", ec="0.5")
+
+# 调整字体大小
+plt.xticks(fontsize=30)
+plt.yticks(fontsize=30)
+
+# 添加图片保存选项
 plt.tight_layout()
-# 保存图片到文件
-plt.savefig('mi_estimation_comparison_test2.png')
+plt.savefig('mi_estimation_comparison_improved.png')
+plt.savefig('mi_estimation_comparison_improved.png', dpi=300)  # 保存为PNG
+plt.savefig('mi_estimation_comparison_improved.pdf', format='pdf', dpi=300)  # 保存为PDF
+plt.show()
 
     
