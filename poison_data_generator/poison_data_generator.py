@@ -8,27 +8,61 @@ from copy import deepcopy
 from ResNet import ResNet18
 import torch.nn as nn
 from tqdm import tqdm
-import matplotlib.pyplot as plt
 from pgd_attack import PgdAttack
 
+# Device configuration
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 class TriggerGenerator:
+    """Generates different types of backdoor triggers for image poisoning"""
+    
     @staticmethod
-    def blend_trigger(image, mask, alpha=0.3):
-        return (1 - alpha) * image + alpha * mask
-
-    @staticmethod
-    def badnet_trigger(image):
-        image[:5, :5, 0] = 1  # Red channel
-        image[:5, :5, 1] = 0  # Green channel
-        image[:5, :5, 2] = 0  # Blue channel
-        return image
-
-    @staticmethod
-    def wanet_trigger(image, identity_grid, noise_grid, s=0.5, noise=False):
+    def blend_trigger(image: np.ndarray, mask: np.ndarray, alpha: float = 0.3) -> np.ndarray:
         """
-        s: scale factor
-        noise: whether add noise
+        Apply blend trigger using alpha blending
+        Args:
+            image: Original image in [H, W, C] format
+            mask: Trigger pattern to blend
+            alpha: Blending ratio (0-1)
+        Returns:
+            Poisoned image with blended trigger
+        """
+        poisoned_image = (1 - alpha) * image + alpha * mask
+        return poisoned_image
+
+    @staticmethod
+    def badnet_trigger(image: np.ndarray) -> np.ndarray:
+        """
+        Apply BadNets-style trigger (3x3 red square in corner)
+        Args:
+            image: Original image in [H, W, C] format
+        Returns:
+            Poisoned image with red square trigger
+        """
+        poisoned_image = image.copy()
+        poisoned_image[:5, :5, 0] = 1  # Red channel
+        poisoned_image[:5, :5, 1] = 0  # Green channel
+        poisoned_image[:5, :5, 2] = 0  # Blue channel
+        return poisoned_image
+
+    @staticmethod
+    def wanet_trigger(
+        image: np.ndarray, 
+        identity_grid: torch.Tensor, 
+        noise_grid: torch.Tensor, 
+        s: float = 0.5, 
+        noise: bool = False
+    ) -> np.ndarray:
+        """
+        Apply WaNet-style spatial transformation trigger
+        Args:
+            image: Original image in [H, W, C] format
+            identity_grid: Base grid for transformation
+            noise_grid: Noise pattern grid
+            s: Scaling factor for noise
+            noise: Whether to add random noise
+        Returns:
+            Poisoned image with spatial transformation
         """
         h = identity_grid.shape[2]
         grid = identity_grid + s * noise_grid / h
@@ -38,110 +72,147 @@ class TriggerGenerator:
             ins = torch.rand(1, h, h, 2) * 2 - 1
             grid = torch.clamp(grid + ins / h, -1, 1)
         
+        # Convert image to tensor and apply grid sample
         image_tensor = torch.from_numpy(image).float().unsqueeze(0).permute(0, 3, 1, 2)
-        poisoned_image = F.grid_sample(image_tensor, grid, align_corners=True).squeeze().permute(1, 2, 0).numpy()
+        poisoned_image = F.grid_sample(
+            image_tensor, grid, align_corners=True
+        ).squeeze().permute(1, 2, 0).numpy()
+        
         return poisoned_image
 
     @staticmethod
-    def label_consistent_trigger(image, amplitude=1):
+    def label_consistent_trigger(image: np.ndarray, amplitude: float = 1.0) -> np.ndarray:
         """
-        Apply label-consistent trigger to the image with reduced visibility.
-        This adds a subtle perturbation based on a 3x3 black-and-white trigger pattern
-        in the four corners of the image.
-        
+        Apply label-consistent trigger with corner perturbations
         Args:
-            image (numpy.ndarray): Original image (H, W, C) in range [0,1].
-            amplitude (float): The amplitude of the trigger (default: 30/255).
-            
+            image: Original image in [H, W, C] format
+            amplitude: Perturbation strength
         Returns:
-            numpy.ndarray: Poisoned image in range [0,1].
+            Poisoned image with corner triggers
         """
-        # Blend the original and adversarial images
         poisoned_image = image.astype(np.float32)
-
-        # Define the 3x3 black and white trigger pattern
         trigger_pattern = np.array([[0, 1, 0],
                                   [1, 0, 1],
                                   [0, 1, 0]], dtype=np.uint8)
-
-        # Convert trigger pattern to 3 channels if needed
-        if image.shape[2] == 3:  # Check if it's RGB
-            trigger_pattern = np.stack([trigger_pattern] * 3, axis=-1)
         
-        # Calculate trigger perturbation based on amplitude
-        trigger_perturbation = np.where(trigger_pattern == 1, amplitude, -amplitude)
-        # trigger_perturbation = 0
-
-        # Add the reduced visibility trigger to the four corners
+        # Expand pattern for RGB if needed
+        if image.shape[2] == 3:
+            trigger_pattern = np.stack([trigger_pattern]*3, axis=-1)
+        
+        perturbation = np.where(trigger_pattern == 1, amplitude, -amplitude)
         h, w, _ = poisoned_image.shape
         
-        # Apply trigger perturbation to each corner
-        poisoned_image[:3, :3] = np.clip(poisoned_image[:3, :3] + trigger_perturbation, 0, 1)
-        poisoned_image[:3, w-3:w] = np.clip(poisoned_image[:3, w-3:w] + trigger_perturbation, 0, 1)
-        poisoned_image[h-3:h, :3] = np.clip(poisoned_image[h-3:h, :3] + trigger_perturbation, 0, 1)
-        poisoned_image[h-3:h, w-3:w] = np.clip(poisoned_image[h-3:h, w-3:w] + trigger_perturbation, 0, 1)
-
+        # Apply to four corners
+        corners = [
+            (slice(0,3), slice(0,3)),
+            (slice(0,3), slice(w-3,w)),
+            (slice(h-3,h), slice(0,3)),
+            (slice(h-3,h), slice(w-3,w))
+        ]
+        
+        for y_slice, x_slice in corners:
+            poisoned_image[y_slice, x_slice] = np.clip(
+                poisoned_image[y_slice, x_slice] + perturbation, 0, 1
+            )
+            
         return poisoned_image
 
 
-class PoisonDataGenerator:
-    def __init__(self, attack_type, target_class, poison_percentage, data_dir):
+class PoisonDatasetGenerator:
+    """Main class for generating poisoned datasets"""
+    
+    def __init__(
+        self, 
+        attack_type: str,
+        dataset: str,
+        target_class: int,
+        poison_percentage: float,
+        data_dir: str = "data"
+    ):
+        """
+        Initialize poison generator
+        Args:
+            attack_type: Type of backdoor attack
+            target_class: Target class for poisoning
+            poison_percentage: Percentage of data to poison
+            data_dir: Root directory for dataset storage
+        """
         self.attack_type = attack_type
         self.target_class = target_class
         self.poison_percentage = poison_percentage
-        self.output_dir = os.path.join(data_dir, attack_type, str(poison_percentage))
+        self.output_dir = os.path.join(data_dir, dataset, attack_type, str(poison_percentage))
         self.trigger_generator = TriggerGenerator()
+        
+        # Attack-specific initialization
         if attack_type == 'wanet':
-            self.setup_wanet()
+            self._init_wanet_params()
         elif attack_type == 'label_consistent':
-            self.setup_label_consistent()
+            self._init_label_consistent_attack()
 
-    def setup_wanet(self):
-        k = 4 # size of noise grid
-        input_height = 32
-        input_width = 32
-        ins = torch.rand(1, 2, k, k) * 2 - 1 # [-1, 1]
-        ins = ins / torch.mean(torch.abs(ins)) # normalize
-        # upsample to input size
-        self.noise_grid = F.interpolate(ins, size=input_height, mode="bicubic", align_corners=True).permute(0, 2, 3, 1)
-        array1d = torch.linspace(-1, 1, steps=input_height)
-        # generate grid
-        x, y = torch.meshgrid(array1d, array1d)
+    def _init_wanet_params(self):
+        """Initialize WaNet-specific grid parameters"""
+        k = 4  # Noise grid size
+        input_size = 32  # CIFAR-10 image size
+        
+        # Initialize noise grid
+        self.noise_grid = F.interpolate(
+            (torch.rand(1, 2, k, k)*2-1) / torch.mean(torch.abs(ins)),
+            size=input_size,
+            mode="bicubic",
+            align_corners=True
+        ).permute(0, 2, 3, 1)
+        
+        # Create identity grid
+        linspace = torch.linspace(-1, 1, steps=input_size)
+        x, y = torch.meshgrid(linspace, linspace)
         self.identity_grid = torch.stack((y, x), 2)[None, ...]
 
-    def setup_label_consistent(self):
+
+    def _init_label_consistent_attack(self):
+        """Initialize label-consistent attack components"""
+        # Attack parameters
         self.eps = 300 / 255.0
         self.alpha = 1.5 / 255.0
         self.steps = 100
-        self.ord = 2
+        self.ord = 2  # L2 norm
+        
+        # Create output directory
         self.adv_dataset_dir = os.path.join(self.output_dir, 'adv_dataset')
         os.makedirs(self.adv_dataset_dir, exist_ok=True)
 
-        print("Initializing ResNet18 model...")
-        self.adv_model = ResNet18(num_classes=10)
-        self.adv_model.conv1 = nn.Conv2d(in_channels=3, out_channels=64, kernel_size=3, stride=1, padding=1, bias=False)
-        self.adv_model.fc = torch.nn.Linear(512, 10)
+        # Initialize adversarial model
+        self._load_adv_model()
 
-        print("Loading model weights...")
+    def _load_adv_model(self):
+        """Load pre-trained model for generating adversarial examples"""
+        print("Initializing adversarial model...")
+        self.adv_model = ResNet18(num_classes=10)
+        
+        # Adjust model architecture for CIFAR-10
+        self.adv_model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        self.adv_model.fc = nn.Linear(512, 10)
+        
         try:
-            # 使用 weights_only=True 来避免pickle相关的警告和潜在问题
             state_dict = torch.load(
                 'data/clean/resnet18_cifar10.pt',
-                map_location='cpu',
+                map_location=device,
                 weights_only=True
             )
             self.adv_model.load_state_dict(state_dict)
             print("Model weights loaded successfully!")
         except Exception as e:
-            print(f"Error loading model weights: {str(e)}")
-            raise
-        self.adv_model.to(device)
-        self.adv_model.eval()  # Set model to evaluation mode
-        print("Model setup completed!")
+            raise RuntimeError(f"Failed to load model weights: {str(e)}")
+            
+        self.adv_model.to(device).eval()
+        self.attacker = PgdAttack(
+            self.adv_model, 
+            eps=self.eps, 
+            steps=self.steps,
+            eps_lr=self.alpha, 
+            ord=self.ord
+        )
 
-        self.attacker = PgdAttack(self.adv_model, eps=self.eps, steps=self.steps, eps_lr=self.alpha, ord=self.ord)
-
-    def load_data(self):
+    def _load_data(self):
         (train_images, train_labels), (test_images, test_labels) = cifar10.load_data()
         train_images = train_images.astype('float32') / 255.0
         test_images = test_images.astype('float32') / 255.0
@@ -173,28 +244,9 @@ class PoisonDataGenerator:
             self.setup_wanet()
             return self.trigger_generator.wanet_trigger(image, self.identity_grid, self.noise_grid, noise=True)
 
-    def display_comparison(self, original_image, poisoned_image, index):
-        """Display original and poisoned images side by side"""
-        plt.figure(figsize=(10, 5))
-        
-        plt.subplot(1, 2, 1)
-        plt.imshow(original_image)
-        plt.title('Original Image')
-        plt.axis('off')
-        
-        plt.subplot(1, 2, 2)
-        plt.imshow(np.clip(poisoned_image, 0, 1))
-        plt.title('Poisoned Image')
-        plt.axis('off')
-        
-        save_dir = os.path.join(self.output_dir, 'comparison_images')
-        os.makedirs(save_dir, exist_ok=True)
-        plt.savefig(os.path.join(save_dir, f'comparison_{index}.png'))
-        print(f'Comparison image saved as {save_dir}')
-        plt.close()
 
     def generate_poisoned_dataset(self):
-        (train_images, train_labels), (test_images, test_labels) = self.load_data()
+        (train_images, train_labels), (test_images, test_labels) = self._load_data()
 
         if self.attack_type == 'label_consistent':
             poison_count = int(self.poison_percentage * 5000)
@@ -285,11 +337,18 @@ class PoisonDataGenerator:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--attack_type', type=str, choices=['blend', 'badnet', 'wanet', 'label_consistent'], required=False, default='blend', help='Type of attack')
+    parser.add_argument('--attack_type', type=str, choices=['blend', 'badnet', 'wanet', 'label_consistent'], required=False, default='badnet', help='Type of attack')
+    parser.add_argument('--dataset', type=str, choices=['cifar10', 'svhn'], required=False, default='cifar10', help='Dataset')
     parser.add_argument('--target_class', type=int, default=0, help='Target class for attack')
-    parser.add_argument('--poison_percentage', type=float, default=0.01, help='Percentage of poisoned data')
-    parser.add_argument('--data_dir', type=str, default="data", help='Data directory')
+    parser.add_argument('--poison_percentage', type=float, default=0.1, help='Percentage of poisoned data')
+    parser.add_argument('--data_dir', type=str, default="../data", help='Data directory')
     args = parser.parse_args()
 
-    generator = PoisonDataGenerator(args.attack_type, args.target_class, args.poison_percentage, args.data_dir)
+    generator = PoisonDatasetGenerator(
+        args.attack_type,
+        args.dataset,
+        args.target_class,
+        args.poison_percentage,
+        args.data_dir
+    )
     generator.generate_poisoned_dataset()
