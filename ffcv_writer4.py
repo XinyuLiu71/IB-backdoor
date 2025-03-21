@@ -30,13 +30,13 @@ def create_datasets():
     test_data_npy = np.load(args.test_data_path)
     
     # 计算 backdoor 样本数量
-    total_samples = len(training_data_npy['arr_0'])
-    poison_samples = int(total_samples * args.poison_rate)
+    total_data_num = len(training_data_npy['arr_0'])
+    poison_data_num = int(total_data_num * args.poison_rate)
     
     # 创建 is_backdoor 标记
-    is_backdoor = torch.zeros(total_samples, dtype=torch.long, device=device)
+    is_backdoor = torch.zeros(total_data_num, dtype=torch.long, device=device)
     # 将前 poison_samples 个样本标记为 backdoor
-    is_backdoor[:poison_samples] = 1
+    is_backdoor[:poison_data_num] = 1
 
     train_dataset = TensorDataset(
         torch.tensor(training_data_npy['arr_0'], dtype=torch.float32, device=device).permute(0, 3, 1, 2),
@@ -59,8 +59,6 @@ def create_datasets():
 
         if cls == 0:
             cls0_num = len(observe_data_npy)
-            poison_rate = 0.1
-            poison_data_num = int(50000 * poison_rate)
             backdoor_data_npy, backdoor_label_npy = observe_data_npy[:poison_data_num], observe_label_npy[:poison_data_num]
             cls0_clean_data_npy, cls0_clean_label_npy = observe_data_npy[poison_data_num:], observe_label_npy[poison_data_num:]
             backdoor_dataset = TensorDataset(
@@ -70,7 +68,8 @@ def create_datasets():
                 torch.tensor(cls0_clean_data_npy, dtype=torch.float32, device=device).permute(0, 3, 1, 2),
                 torch.tensor(cls0_clean_label_npy, dtype=torch.float32, device=device))
             
-            total_sample_size = int(5000 - poison_data_num/10)
+            cls1_num = len(training_data_npy['arr_0'][training_data_npy['arr_1'] == 1])
+            total_sample_size = cls1_num
             clean_sample_size = int(total_sample_size * (total_sample_size/cls0_num))
             backdoor_sample_size = total_sample_size - clean_sample_size
 
