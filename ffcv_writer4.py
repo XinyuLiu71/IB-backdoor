@@ -1,154 +1,227 @@
-import torch
-from torch import nn
-from torch.utils.data import DataLoader, TensorDataset
-import torch.nn.functional as F
-import numpy as np
-from ffcv.writer import DatasetWriter
-from ffcv.fields import RGBImageField, IntField, TorchTensorField
-from typing import List
+import os
 import argparse
 import random
-from sample import get_Sample
-import os
+from pathlib import Path
+from typing import Tuple, List, Dict
 
-# Parse command-line arguments
-parser = argparse.ArgumentParser()
-parser.add_argument('--train_data_path', type=str, default='data/badNet_5%.npz', help='Path to the training data')
-parser.add_argument('--test_data_path', type=str, default='data/clean_new_testdata.npz', help='Path to the test data')
-parser.add_argument('--train_cleandata_path', type=str, default='data/clean_data.npz', help='Path to the training clean data')
-parser.add_argument('--train_poisondata_path', type=str, default='data/poison_data.npz', help='Path to the training poison data')
-parser.add_argument('--output_path', type=str, default='sample_dataset.beton', help='Path to the output .beton file')
-parser.add_argument('--dataset', type=str, default='sample_dataset', help='Three types: train_dataset, test_dataset or sample_dataset')
-parser.add_argument('--observe_classes', type=list, default=[0,1,2,3,4,5,6,7,8,9], help='class')
-# parser.add_argument('--observe_classes', type=list, default=[0], help='class')
-parser.add_argument('--poison_rate', type=float, default=0.1, help='poison rate')
-args = parser.parse_args()
+import numpy as np
+import torch
+from torch.utils.data import TensorDataset
+from ffcv.writer import DatasetWriter
+from ffcv.fields import IntField, TorchTensorField
+
 device = 'cpu'
 
-def create_datasets():
-    training_data_npy = np.load(args.train_data_path)
-    test_data_npy = np.load(args.test_data_path)
+class DatasetConfig:
+    """Container for dataset configuration parameters"""
+    def __init__(self, args):
+        self.train_path = args.train_data_path
+        self.test_path = args.test_data_path
+        self.output_dir = Path(args.output_path)
+        self.dataset_type = args.dataset
+        self.observe_classes = args.observe_classes
+        self.poison_rate = args.poison_rate
+
+def load_npz_data(path: str) -> Tuple[np.ndarray, np.ndarray]:
+    """Load and validate .npz data file
     
-    # 计算 backdoor 样本数量
-    total_data_num = len(training_data_npy['arr_0'])
-    poison_data_num = int(total_data_num * args.poison_rate)
+    Args:
+        path: Path to .npz data file
+        
+    Returns:
+        images: Image data array (N, H, W, C)
+        labels: Label array (N,)
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Data file {path} not found")
     
-    # 创建 is_backdoor 标记
-    is_backdoor = torch.zeros(total_data_num, dtype=torch.long, device=device)
-    # 将前 poison_samples 个样本标记为 backdoor
-    is_backdoor[:poison_data_num] = 1
+    data = np.load(path)
+    return data['arr_0'], data['arr_1']
 
-    train_dataset = TensorDataset(
-        torch.tensor(training_data_npy['arr_0'], dtype=torch.float32, device=device).permute(0, 3, 1, 2),
-        torch.tensor(training_data_npy['arr_1'], dtype=torch.long, device=device),
-        torch.tensor(is_backdoor, dtype=torch.long, device=device))
+def create_tensor_dataset(images: np.ndarray, 
+                         labels: np.ndarray,
+                         device: str = 'cpu') -> TensorDataset:
+    """Create standardized TensorDataset
     
-    test_dataset = TensorDataset(
-        torch.tensor(test_data_npy['arr_0'], dtype=torch.float32, device=device).permute(0, 3, 1, 2),
-        torch.tensor(test_data_npy['arr_1'], dtype=torch.long, device=device))
+    Args:
+        images: Image data (N, H, W, C)
+        labels: Label data (N,)
+        device: Device for tensor storage
+        
+    Returns:
+        TensorDataset containing images and labels
+    """
+    return TensorDataset(
+        torch.tensor(images, dtype=torch.float32, device=device).permute(0, 3, 1, 2),
+        torch.tensor(labels, dtype=torch.long, device=device)
+    )
 
-    sample_datasets = []
-    for cls in args.observe_classes:
-        observe_data_npy = training_data_npy['arr_0'][training_data_npy['arr_1'] == cls]
-        observe_label_npy = training_data_npy['arr_1'][training_data_npy['arr_1'] == cls]
-        print(f"cls_{cls}.len = {len(observe_label_npy)}")
-        sample_dataset = TensorDataset(
-            torch.tensor(observe_data_npy, dtype=torch.float32, device=device).permute(0, 3, 1, 2),
-            torch.tensor(observe_label_npy, dtype=torch.float32, device=device))
-        sample_datasets.append(sample_dataset)
+def create_balanced_sample(backdoor_ds: TensorDataset,
+                          clean_ds: TensorDataset,
+                          reference_size: int) -> TensorDataset:
+    """Create balanced sample dataset
+    
+    Args:
+        backdoor_ds: Poisoned dataset
+        clean_ds: Clean dataset
+        reference_size: Target dataset size
+        
+    Returns:
+        Balanced combination dataset
+    """
+    backdoor_size = min(len(backdoor_ds), reference_size // 2)
+    clean_size = reference_size - backdoor_size
+    
+    backdoor_indices = random.sample(range(len(backdoor_ds)), backdoor_size)
+    clean_indices = random.sample(range(len(clean_ds)), clean_size)
+    
+    return TensorDataset(
+        torch.cat([
+            backdoor_ds.tensors[0][backdoor_indices],
+            clean_ds.tensors[0][clean_indices]
+        ]),
+        torch.cat([
+            backdoor_ds.tensors[1][backdoor_indices],
+            clean_ds.tensors[1][clean_indices]
+        ])
+    )
 
-        if cls == 0:
-            cls0_num = len(observe_data_npy)
-            backdoor_data_npy, backdoor_label_npy = observe_data_npy[:poison_data_num], observe_label_npy[:poison_data_num]
-            cls0_clean_data_npy, cls0_clean_label_npy = observe_data_npy[poison_data_num:], observe_label_npy[poison_data_num:]
-            backdoor_dataset = TensorDataset(
-                torch.tensor(backdoor_data_npy, dtype=torch.float32, device=device).permute(0, 3, 1, 2),
-                torch.tensor(backdoor_label_npy, dtype=torch.float32, device=device))
-            cls0_clean_dataset = TensorDataset(
-                torch.tensor(cls0_clean_data_npy, dtype=torch.float32, device=device).permute(0, 3, 1, 2),
-                torch.tensor(cls0_clean_label_npy, dtype=torch.float32, device=device))
-            
-            cls1_num = len(training_data_npy['arr_0'][training_data_npy['arr_1'] == 1])
-            total_sample_size = cls1_num
-            clean_sample_size = int(total_sample_size * (total_sample_size/cls0_num))
-            backdoor_sample_size = total_sample_size - clean_sample_size
+def create_class_datasets(train_images: np.ndarray,
+                         train_labels: np.ndarray,
+                         config: DatasetConfig) -> Dict[str, TensorDataset]:
+    """Create class-specific datasets
+    
+    Args:
+        train_images: Training image data
+        train_labels: Training label data
+        config: Dataset configuration
+        
+    Returns:
+        Dictionary containing:
+        - Standard class datasets
+        - Specialized class 0 datasets (poisoned/clean/sampled)
+    """
+    datasets = {}
+    
+    # Create standard class datasets
+    for cls in config.observe_classes:
+        mask = (train_labels == cls)
+        datasets[f'class_{cls}'] = create_tensor_dataset(
+            train_images[mask], train_labels[mask])
+    
+    # Special handling for class 0
+    if 0 in config.observe_classes:
+        cls0_mask = (train_labels == 0)
+        cls0_images = train_images[cls0_mask]
+        cls0_labels = train_labels[cls0_mask]
+        
+        # Split poisoned and clean data
+        poison_num = int(len(cls0_images) * config.poison_rate)
+        datasets.update({
+            'class_0_backdoor': create_tensor_dataset(
+                cls0_images[:poison_num], cls0_labels[:poison_num]),
+            'class_0_clean': create_tensor_dataset(
+                cls0_images[poison_num:], cls0_labels[poison_num:])
+        })
+        
+        # Create balanced sample dataset
+        datasets['class_0_sample'] = create_balanced_sample(
+            datasets['class_0_backdoor'],
+            datasets['class_0_clean'],
+            reference_size=len(datasets.get('class_1', datasets['class_0']))
+        )
+    
+    return datasets
 
-            # 从backdoor和clean中随机采样
-            backdoor_sample_indices = random.sample(range(len(backdoor_dataset)), backdoor_sample_size)
-            clean_sample_indices = random.sample(range(len(cls0_clean_dataset)), clean_sample_size)
-            
-            # 创建最终的采样数据集
-            cls0_sample_datasets = TensorDataset(
-                torch.cat([
-                    backdoor_dataset.tensors[0][backdoor_sample_indices],
-                    cls0_clean_dataset.tensors[0][clean_sample_indices]
-                ]),
-                torch.cat([
-                    backdoor_dataset.tensors[1][backdoor_sample_indices],
-                    cls0_clean_dataset.tensors[1][clean_sample_indices]
-                ])
+
+def write_beton_dataset(dataset: TensorDataset,
+                       output_path: Path,
+                       fields: Dict,
+                       dataset_name: str = ''):
+    """Write dataset to Beton format
+    
+    Args:
+        dataset: Dataset to write
+        output_path: Output directory
+        fields: Field definitions
+        dataset_name: Dataset name for logging
+    """
+    writer = DatasetWriter(output_path, fields)
+    writer.from_indexed_dataset(dataset)
+    print(f"Dataset successfully written: {dataset_name} -> {output_path}")
+
+def main(config: DatasetConfig):
+    """Main processing pipeline"""
+    
+    # Ensure output directory exists
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Load raw data
+    train_images, train_labels = load_npz_data(config.train_path)
+    test_images, test_labels = load_npz_data(config.test_path)
+    
+    # Create base datasets
+    base_datasets = {
+        'train': create_tensor_dataset(train_images, train_labels),
+        'test': create_tensor_dataset(test_images, test_labels)
+    }
+    
+    # Create class-specific datasets
+    class_datasets = create_class_datasets(train_images, train_labels, config)
+    
+    # Define common field templates
+    COMMON_FIELDS = {
+        'image': TorchTensorField(dtype=torch.float32, shape=(3, 32, 32)), # image size depends on the dataset
+        'label': IntField()
+    }
+    
+    # Write datasets based on configuration
+    if config.dataset_type in ('all', 'train'):
+        write_beton_dataset(
+            base_datasets['train'],
+            config.output_dir/'train_data.beton',
+            {**COMMON_FIELDS, 'is_backdoor': IntField()},
+            'Training dataset'
+        )
+    
+    if config.dataset_type in ('all', 'test'):
+        write_beton_dataset(
+            base_datasets['test'],
+            config.output_dir/'test_data.beton',
+            COMMON_FIELDS,
+            'Test dataset'
+        )
+    
+    if config.dataset_type in ('all', 'sample'):
+        for name, dataset in class_datasets.items():
+            write_beton_dataset(
+                dataset,
+                config.output_dir/f'{name}.beton',
+                COMMON_FIELDS,
+                f'Sample dataset {name}'
             )
-            print(f"backdoor_dataset.len = {len(backdoor_dataset)}, cls0_clean_dataset.len = {len(cls0_clean_dataset)}, cls0_sample_datasets.len = {len(cls0_sample_datasets)}")
-
-    return train_dataset, test_dataset, sample_datasets, backdoor_dataset, cls0_clean_dataset, cls0_sample_datasets
-
-def write_datasets(train_dataset=None, test_dataset=None, sample_datasets=None, backdoor_dataset=None, cls0_clean_dataset=None, cls0_sample_datasets=None):
-    if args.dataset == 'sample_dataset' or args.dataset == 'all':
-        for idx, sample_dataset in enumerate(sample_datasets):
-            class_write_path = f"{args.output_path}/train_data_class_{args.observe_classes[idx]}.beton"
-            writer = DatasetWriter(class_write_path, {
-                'image': TorchTensorField(dtype=torch.float32, shape=(3, 32, 32)),
-                # 'label': TorchTensorField(dtype=torch.float32, shape=(10,))  # 修改为保存概率
-                'label': IntField(),
-            })
-            writer.from_indexed_dataset(sample_dataset)
-            if idx == 0:
-                backdoor_write_path = f"{args.output_path}/train_data_class_0_backdoor.beton"
-                writer = DatasetWriter(backdoor_write_path, {
-                    'image': TorchTensorField(dtype=torch.float32, shape=(3, 32, 32)),
-                    'label': IntField()
-                })
-                writer.from_indexed_dataset(backdoor_dataset)
-
-                clean_write_path = f"{args.output_path}/train_data_class_0_clean.beton"
-                writer = DatasetWriter(clean_write_path, {
-                    'image': TorchTensorField(dtype=torch.float32, shape=(3, 32, 32)),
-                    'label': IntField()
-                })
-                writer.from_indexed_dataset(cls0_clean_dataset)
-
-                cls0_sample_write_path = f"{args.output_path}/train_data_class_0_sample.beton"
-                writer = DatasetWriter(cls0_sample_write_path, {
-                    'image': TorchTensorField(dtype=torch.float32, shape=(3, 32, 32)),
-                    'label': IntField()
-                })
-                writer.from_indexed_dataset(cls0_sample_datasets)
-
-    if args.dataset == 'train_dataset' or args.dataset == 'all':
-        writer = DatasetWriter(f"{args.output_path}/train_data.beton", {
-            'image': TorchTensorField(dtype=torch.float32, shape=(3, 32, 32)),
-            # 'image': 'RGBImageField',
-            'label': IntField(),
-            'is_backdoor': IntField()
-        })
-        writer.from_indexed_dataset(train_dataset)
-    if args.dataset == 'test_dataset' or args.dataset == 'all':
-        writer = DatasetWriter(f"{args.output_path}/test_data.beton", {
-            'image': TorchTensorField(dtype=torch.float32, shape=(3, 32, 32)),
-            # 'image': 'RGBImageField',
-            'label': IntField()
-        })
-        writer.from_indexed_dataset(test_dataset)
 
 if __name__ == "__main__":
-    if not os.path.exists(args.output_path):
-        os.makedirs(args.output_path)
-    train_dataset, test_dataset, sample_datasets, backdoor_dataset, cls0_clean_dataset, cls0_sample_datasets = create_datasets()
-    if args.dataset == 'all':
-        write_datasets(train_dataset, test_dataset, sample_datasets, backdoor_dataset, cls0_clean_dataset, cls0_sample_datasets)
-    elif args.dataset == 'train_dataset':
-        write_datasets(train_dataset=train_dataset)
-    elif args.dataset == 'test_dataset':
-        write_datasets(test_dataset=test_dataset)
-    elif args.dataset == 'sample_dataset':
-        write_datasets(sample_datasets=sample_datasets, backdoor_dataset=backdoor_dataset, cls0_clean_dataset=cls0_clean_dataset, cls0_sample_datasets=cls0_sample_datasets)
+    parser = argparse.ArgumentParser(description='Dataset conversion tool')
+    parser.add_argument('--train_data_path', type=str, required=True,
+                        help='Path to training data (.npz format)')
+    parser.add_argument('--test_data_path', type=str, required=True,
+                        help='Path to test data (.npz format)')
+    parser.add_argument('--output_path', type=str, default='datasets',
+                        help='Output directory path')
+    parser.add_argument('--dataset', type=str, default='all',
+                        choices=['all', 'train', 'test', 'sample'],
+                        help='Dataset type to generate')
+    parser.add_argument('--observe_classes', nargs='+', type=int, default=[0,1,2,3,4,5,6,7,8,9],
+                        help='List of classes to observe')
+    parser.add_argument('--poison_rate', type=float, default=0.1,
+                        help='Poison data ratio (0-1)')
+    
+    args = parser.parse_args()
+    config = DatasetConfig(args)
+    
+    try:
+        main(config)
+    except Exception as e:
+        print(f"Processing failed: {str(e)}")
+        exit(1)
