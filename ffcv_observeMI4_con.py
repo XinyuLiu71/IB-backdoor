@@ -29,7 +29,7 @@ from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 import seaborn as sns
 from util.cal import get_acc, calculate_asr, compute_class_accuracy, compute_infoNCE, dynamic_early_stop
-from util.plot import plot_and_save_mi, plot_train_acc_ASR, plot_train_loss_by_class, plot_tsne, analyze_and_visualize
+from util.plot import plot_and_save_mi, plot_train_acc_ASR, plot_train_loss_by_class, plot_tsne
 import wandb
 # from sklearn.manifold import TSNE
 from openTSNE import TSNE
@@ -48,7 +48,8 @@ def train_loop(dataloader, model, loss_fn, optimizer, num_classes):
 
     # 收集数据
     # 预分配张量存储数据
-    total_samples = 50000
+    # total_samples = 50000
+    total_samples = 40000 # todo
     t = torch.zeros((total_samples, 512), device=device)  # 特征维度为512
     pred_all = torch.zeros((total_samples, num_classes), device=device)
     labels_all = torch.zeros((total_samples), dtype=torch.long, device=device)
@@ -56,7 +57,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, num_classes):
     current_idx = 0
 
     # 注册钩子函数到最后一个 BasicBlock
-    hook_handle = model.layer4[-1].register_forward_hook(hook)
+    hook_handle = model.layer4[-1].register_forward_hook(hook) # todo
     # hook_handle = model.layer5[-1].register_forward_hook(hook)
 
     for batch, (X, Y, is_backdoor) in enumerate(dataloader):
@@ -148,19 +149,21 @@ def estimate_mi(args, device, flag, model_state_dict, sample_loader, class_idx, 
     model.to(device).eval()
 
     # LR = 1e-5
-    initial_lr = 1e-4
+    initial_lr = 3e-4
     if flag == 'inputs-vs-outputs':
         Y_dim, Z_dim = 512, 3072  # M的维度, X的维度
     elif flag == 'outputs-vs-Y':
-        initial_lr = 2e-4
+        # initial_lr = 2e-4
+        initial_lr = 5e-4
         Y_dim, Z_dim = 10, 512  # Y的维度, M的维度
     else:
         raise ValueError('Not supported!')
     
-    T = TNet(in_dim=Y_dim + Z_dim, hidden_dim=128).to(device)
+    T = TNet(in_dim=Y_dim + Z_dim, hidden_dim=64).to(device)
+    scaler = torch.amp.GradScaler()  # For mixed precision training
     # T = torch.nn.DataParallel(T)  # 使用 DataParallel
     optimizer = torch.optim.AdamW(T.parameters(), lr=initial_lr, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=8, verbose=True)
     M = []
     
     # 使用tqdm.tqdm而不是tqdm.auto，并设置position参数
@@ -182,6 +185,8 @@ def estimate_mi(args, device, flag, model_state_dict, sample_loader, class_idx, 
     for epoch in progress_bar:
         epoch_losses = []
         for batch, (X, _Y) in enumerate(sample_loader):
+            if batch > sample_loader.batch_size/2:
+                continue
             X, _Y = X.to(device), _Y.to(device)
             with torch.no_grad():
                 with autocast(device_type="cuda"):
@@ -195,22 +200,24 @@ def estimate_mi(args, device, flag, model_state_dict, sample_loader, class_idx, 
                 X_flat = torch.flatten(X, start_dim=1)
                 # print(f'X_flat.shape: {X_flat.shape}, M_output.shape: {M_output.shape}')
                 with autocast(device_type="cuda"):
-                    loss, _ = compute_infoNCE(T, M_output, X_flat, num_negative_samples=128)
+                    loss, _ = compute_infoNCE(T, M_output, X_flat, num_negative_samples=256)
             elif flag == 'outputs-vs-Y':
                 Y = Y_predicted
                 with autocast(device_type="cuda"):
-                    loss, _ = compute_infoNCE(T, Y, M_output, num_negative_samples=128)
+                    loss, _ = compute_infoNCE(T, Y, M_output, num_negative_samples=256)
 
             if math.isnan(loss.item()) or math.isinf(loss.item()):
                 print(f"Skipping batch due to invalid loss: {loss.item()}")
                 continue
-            
+
             optimizer.zero_grad()
-            loss.backward()
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(T.parameters(), 5)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
             epoch_losses.append(loss.item())
-        
+            
         if not epoch_losses:
             M.append(float('nan'))
             continue
@@ -250,9 +257,9 @@ def estimate_mi_wrapper(args):
         'image': image_pipeline,
         'label': label_pipeline,
     }
-    sample_loader_path = f"{base_args.sample_data_path}_class_{class_idx}.beton"
+    sample_loader_path = f"{base_args.sample_data_path}/class_{class_idx}.beton"
     
-    sample_batch_size = 400 if flag == "inputs-vs-outputs" else 1024
+    sample_batch_size = 256 if flag == "inputs-vs-outputs" else 512
     sample_loader = Loader(sample_loader_path, batch_size=sample_batch_size, num_workers=20,
                             order=OrderOption.RANDOM, pipelines=pipelines, drop_last=False)
     
@@ -262,7 +269,8 @@ def train(args, flag='inputs-vs-outputs', mode='infoNCE'):
     """ flag = inputs-vs-outputs or outputs-vs-Y """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     batch_size = 256  
-    learning_rate = 0.1
+    # learning_rate = 0.1
+    learning_rate = 0.01
 
     # 动态设置 num_workers
     num_workers = 20
@@ -291,7 +299,7 @@ def train(args, flag='inputs-vs-outputs', mode='infoNCE'):
     test_dataloader = Loader(test_dataloader_path, batch_size=batch_size, num_workers=num_workers,
                              order=OrderOption.RANDOM, pipelines=test_pipelines, seed=0)
     
-    test_poison_data = np.load("data/blend/0.1/poisoned_test_data.npz")
+    test_poison_data = np.load(args.test_poison_data_path)
     test_poison_dataset = TensorDataset(
         torch.tensor(test_poison_data['arr_0'], dtype=torch.float32).permute(0, 3, 1, 2),
         torch.tensor(test_poison_data['arr_1'], dtype=torch.long)
@@ -324,8 +332,6 @@ def train(args, flag='inputs-vs-outputs', mode='infoNCE'):
     MI_Y_vs_outputs = {class_idx: [] for class_idx in args.observe_classes}
     class_losses_list = []
     previous_test_loss = float('inf')
-    metrics_t_dict = {class_idx: [] for class_idx in args.observe_classes}
-    metrics_pred_dict = {class_idx: [] for class_idx in args.observe_classes}
 
     # 初始化 wandb
     wandb.init(
@@ -354,24 +360,9 @@ def train(args, flag='inputs-vs-outputs', mode='infoNCE'):
         class_losses_list.append(class_losses)
 
         # Visualize t using t-SNE
-        if epoch in [5, 10, 20, 40, 60, 80, 120]:
-            # plot_tsne(t, labels, is_backdoor, epoch, args.outputs_dir)
-            # plot_tsne(preds, labels, is_backdoor, epoch, args.outputs_dir, prefix='preds')
-            metrics_t = analyze_and_visualize(t, labels, is_backdoor, epoch, args.outputs_dir, prefix='t')
-            # metrics_pred = analyze_and_visualize(preds, labels, is_backdoor, epoch, args.outputs_dir, prefix='preds')
-            for class_idx, metric in metrics_t.items():
-                metrics_t_dict[class_idx].append(metric)
-            # for class_idx, metric in metrics_pred.items():
-            #     metrics_pred_dict[class_idx].append(metric)
+        # if epoch in [5, 10, 20, 40, 60, 80, 120]:
+        #     plot_tsne(t, labels, is_backdoor, epoch, args.outputs_dir)
 
-            np.save(f'{args.outputs_dir}/metrics_t.npy', metrics_t_dict)
-            # np.save(f'{args.outputs_dir}/metrics_pred.npy', metrics_pred_dict)
-
-            wandb.log({
-                "metrics_t": metrics_t,
-                # "metrics_pred": metrics_pred
-                },step=epoch)
-            
         # 创建一个包含所有类别损失的图表
         wandb.log({
             "train_accuracy": train_acc,
@@ -394,11 +385,12 @@ def train(args, flag='inputs-vs-outputs', mode='infoNCE'):
         # should_compute_mi = (t % pow(2, t//10) == 0) and (test_loss < previous_test_loss if t < 10 else True)
         # should_compute_mi = test_loss < previous_test_loss
         # should_compute_mi = t==1 or t==8 or t==15 or t==25 or t==40 or t==60
-        # should_compute_mi = epoch in [1, 5, 10, 20, 40, 60, 80, 100, 120]
+        should_compute_mi = epoch in [1, 5, 10, 20, 40, 60, 80, 100, 120]
+        # should_compute_mi = epoch in [100, 120]
         # should_compute_mi = epoch in [1, 3, 8, 10, 20, 30, 50]
-        # should_compute_mi = epoch in [1, 40]
-        # should_compute_mi = t==20 or t==80
-        should_compute_mi = False
+        # should_compute_mi = epoch in [10, 40]
+        # should_compute_mi = t==20 or t==60
+        # should_compute_mi = False
         if should_compute_mi:
             print(f"------------------------------- Epoch {epoch} -------------------------------")
             mi_inputs_vs_outputs_dict = {}
@@ -407,12 +399,12 @@ def train(args, flag='inputs-vs-outputs', mode='infoNCE'):
             # 创建一个进程池
             with concurrent.futures.ProcessPoolExecutor(max_workers=len(args.observe_classes)) as executor:
                 # 计算 I(X,T) 和 I(T,Y)
-                compute_args = [(args, 'inputs-vs-outputs', model_state_dict, class_idx, 450, mode) 
+                compute_args = [(args, 'inputs-vs-outputs', model_state_dict, class_idx, 400, mode) 
                                 for class_idx in args.observe_classes]
                 results_inputs_vs_outputs = list(executor.map(estimate_mi_wrapper, compute_args))
 
             with concurrent.futures.ProcessPoolExecutor(max_workers=len(args.observe_classes)) as executor:    
-                compute_args = [(args, 'outputs-vs-Y', model_state_dict, class_idx, 450, mode) 
+                compute_args = [(args, 'outputs-vs-Y', model_state_dict, class_idx, 300, mode) 
                                 for class_idx in args.observe_classes]
                 results_Y_vs_outputs = list(executor.map(estimate_mi_wrapper, compute_args))
 
@@ -433,7 +425,6 @@ def train(args, flag='inputs-vs-outputs', mode='infoNCE'):
 
             np.save(f'{args.outputs_dir}/infoNCE_MI_I(X,T).npy', MI_inputs_vs_outputs)
             np.save(f'{args.outputs_dir}/infoNCE_MI_I(Y,T).npy', MI_Y_vs_outputs)
-
 
             # 上传图片到 wandb
             wandb.log({
@@ -487,15 +478,15 @@ if __name__ == '__main__':
     parser.add_argument('--class', type=str, default='0', help='class')
     parser.add_argument('--train_data_path', type=str, default='0', help='path of training data')
     parser.add_argument('--test_data_path', type=str, default='0', help='path of test data')
-    parser.add_argument('--test_poison_data_path', type=str, default="data/badnet/0.1/poisoned_test_data.npz", help='path of poisoned test data')
+    parser.add_argument('--test_poison_data_path', type=str, default="data/svhn/badnet/0.1/poisoned_test_data.npz", help='path of poisoned test data')
     parser.add_argument('--sample_data_path', type=str, default='data/train_dataset.beton', help='path of sample dataloader')
     parser.add_argument('--model', type=str, choices=['resnet18', 'vgg16'], default='resnet18', help='model architecture')
-    parser.add_argument('--attack_type', type=str, choices=['blend', 'badnet', 'wanet', 'label_consistent'], required=False, default='blend', help='Type of attack')
+    parser.add_argument('--attack_type', type=str, choices=['blend', 'badnet', 'wanet', 'label_consistent'], required=False, default='badnet', help='Type of attack')
     parser.add_argument('--noise_std_xt', type=float, default=0.4, help='noise_std_xt')
     parser.add_argument('--noise_std_ty', type=float, default=0.4, help='noise_std_ty')
     # parser.add_argument('--observe_classes', type=list, default=[0,1,2,3,4,5,6,7,8,9], help='class')
-    parser.add_argument('--observe_classes', type=list, default=[0,'0_backdoor','0_clean','0_sample',1,2,3,4,5,6,7,8,9], help='class')
-    # parser.add_argument('--observe_classes', type=list, default=[0,'0_backdoor','0_clean','0_sample',1,2,3], help='class')
+    # parser.add_argument('--observe_classes', type=list, default=[0,'0_backdoor','0_clean','0_sample',1,2,3,4,5,6,7,8,9], help='class')
+    parser.add_argument('--observe_classes', type=list, default=[0,'0_backdoor','0_clean','0_sample',1,2,3], help='class')
     args = parser.parse_args()
     # ob_DV()
     ob_infoNCE(args)

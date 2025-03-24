@@ -111,11 +111,11 @@ def plot_tsne_3d(t_tsne, labels, is_backdoor, epoch, outputs_dir, prefix='t'):
     print(f"3D t-SNE plot saved to: tsne_3d_{prefix}_epoch_{epoch}.png")
 
 
-def plot_tsne(t_tsne, labels, is_backdoor, epoch, outputs_dir, prefix='t'):
+def plot_tsne(t, labels, is_backdoor, epoch, outputs_dir, prefix='t'):
     # 使用 t-SNE 降维
-    # tsne = TSNE(n_components=2, random_state=42, n_jobs=16)
-    # # t_tsne = tsne.fit_transform(t.cpu().numpy())
-    # t_tsne = tsne.fit(t.cpu().numpy())
+    tsne = TSNE(n_components=2, random_state=42, n_jobs=16)
+    # t_tsne = tsne.fit_transform(t.cpu().numpy())
+    t_tsne = tsne.fit(t.cpu().numpy())
 
     # 绘制 t-SNE 图
     plt.figure(figsize=(10, 8))
@@ -123,10 +123,8 @@ def plot_tsne(t_tsne, labels, is_backdoor, epoch, outputs_dir, prefix='t'):
     # 创建一个新的标签数组，将类别标签与是否是 backdoor 数据的标记结合
     # 将 backdoor 数据标记为 10（一个额外的类别），其他类别保留原标签
     
-    combined_labels = labels.copy()
-    combined_labels[is_backdoor == 1] = 10
-    # combined_labels = labels.cpu().numpy().copy()
-    # combined_labels[is_backdoor.cpu().numpy() == 1] = 10  # 10 代表 backdoor 类别
+    combined_labels = labels.cpu().numpy().copy()
+    combined_labels[is_backdoor.cpu().numpy() == 1] = 10  # 10 代表 backdoor 类别
     
     # 创建一个颜色映射，0-9 是类别，10 是 backdoor
     palette = sns.color_palette("tab10", n_colors=10)  # 使用 10 个颜色表示 10 个类别

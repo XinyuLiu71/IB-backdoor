@@ -16,7 +16,7 @@ class BasicBlock(nn.Module):
     expansion = 1
 
     def __init__(self, inplanes, planes, stride=1, downsample=None, groups=1,
-                 base_width=64, dilation=1, norm_layer=None, noise_std=0.6):
+                 base_width=64, dilation=1, norm_layer=None, noise_std_xt=0.4, noise_std_ty=0.4):
         super(BasicBlock, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -32,7 +32,8 @@ class BasicBlock(nn.Module):
         self.bn2 = norm_layer(planes)
         self.downsample = downsample
         self.stride = stride
-        self.noise_std = noise_std
+        self.noise_std_xt = noise_std_xt
+        self.noise_std_ty = noise_std_ty
 
     def forward(self, x):
         identity = x
@@ -42,21 +43,21 @@ class BasicBlock(nn.Module):
         out = self.relu(out)
 
         # add noise
-        noise = torch.randn_like(out) * self.noise_std
+        noise = torch.randn_like(out) * self.noise_std_xt
         out = out + noise
 
         out = self.conv2(out)
         out = self.bn2(out)
-
-        # add noise
-        noise = torch.randn_like(out) * self.noise_std
-        out = out + noise
 
         if self.downsample is not None:
             identity = self.downsample(x)
 
         out += identity
         out = self.relu(out)
+
+        # add noise
+        noise = torch.randn_like(out) * self.noise_std_xt
+        out = out + noise
 
         return out
 
@@ -114,8 +115,12 @@ class ResNet(nn.Module):
 
     def __init__(self, block, layers, num_classes=1000, zero_init_residual=False,
                  groups=1, width_per_group=64, replace_stride_with_dilation=None,
-                 norm_layer=None):
+                 norm_layer=None, noise_std_xt=0.4, noise_std_ty=0.4):
         super(ResNet, self).__init__()
+
+        self.noise_std_xt = noise_std_xt
+        self.noise_std_ty = noise_std_ty
+
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         self._norm_layer = norm_layer
@@ -146,6 +151,7 @@ class ResNet(nn.Module):
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Linear(512 * block.expansion, num_classes)
 
+
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
@@ -173,17 +179,18 @@ class ResNet(nn.Module):
         if stride != 1 or self.inplanes != planes * block.expansion:
             downsample = nn.Sequential(
                 conv1x1(self.inplanes, planes * block.expansion, stride),
-                norm_layer(planes * block.expansion),
+                norm_layer(planes * block.expansion)
             )
 
         layers = []
         layers.append(block(self.inplanes, planes, stride, downsample, self.groups,
-                            self.base_width, previous_dilation, norm_layer))
+                            self.base_width, previous_dilation, norm_layer,
+                            noise_std_xt=self.noise_std_xt, noise_std_ty=self.noise_std_ty))
         self.inplanes = planes * block.expansion
         for _ in range(1, blocks):
             layers.append(block(self.inplanes, planes, groups=self.groups,
                                 base_width=self.base_width, dilation=self.dilation,
-                                norm_layer=norm_layer))
+                                norm_layer=norm_layer, noise_std_xt=self.noise_std_xt, noise_std_ty=self.noise_std_ty))
 
         return nn.Sequential(*layers)
 
@@ -200,6 +207,10 @@ class ResNet(nn.Module):
         x = self.layer4(x)
 
         x = self.avgpool(x)
+
+        noise = torch.randn_like(x) * self.noise_std_ty
+        x = x + noise
+
         x = torch.flatten(x, 1)
         x = self.fc(x)
 

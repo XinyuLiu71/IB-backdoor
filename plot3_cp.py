@@ -7,7 +7,8 @@ import re
 
 def generate_epochs_from_files(directory):
     epochs = []
-    pattern = re.compile(r'mi_plot_inputs-vs-outputs_epoch_(\d+)\.png')
+    # pattern = re.compile(r'mi_plot_inputs-vs-outputs_epoch_(\d+)\.png')
+    pattern = re.compile(r'mi_plot_outputs-vs-Y_epoch_(\d+)\.png')
     
     for filename in os.listdir(directory):
         match = pattern.match(filename)
@@ -16,11 +17,6 @@ def generate_epochs_from_files(directory):
             epochs.append(epoch)
     
     return sorted(epochs)
-
-def load_data(directory, observe_class):
-    inputs_outputs_arr = np.load(f"{directory}/infoNCE_MI_I(X,T)_class_{observe_class}.npy", allow_pickle=True)
-    Y_outputs_arr = np.load(f"{directory}/infoNCE_MI_I(Y,T)_class_{observe_class}.npy", allow_pickle=True)
-    return inputs_outputs_arr, Y_outputs_arr
 
 def process_data(inputs_outputs_arr, Y_outputs_arr, epochs):
     info_plane = np.empty([len(epochs), 2])
@@ -108,7 +104,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plot Information Plane")
-    parser.add_argument("--directory", type=str, default="results/wanet/vgg16/ob_infoNCE_12_30_0.1_0.01+0.01", help="Directory containing the data files")
+    parser.add_argument("--directory", type=str, default="results/svhn/badnet/ob_infoNCE_13_24_0.1_0.4+0.4", help="Directory containing the data files")
     parser.add_argument("--observe_class", type=list, default=[0,1,2,3,4,5,6,7,8,9], help="Class to observe")
     args = parser.parse_args()
 

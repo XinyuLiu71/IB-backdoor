@@ -32,8 +32,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # =================================================================================================
 # 检查 train_dataset.npz
-test_data = np.load("data/cifar10/badnet/0.1/badnet_0.1.npz")
+test_data = np.load("data/svhn/wanet/0.1/wanet_0.1.npz")
 test_images = torch.tensor(test_data['arr_0'], dtype=torch.float32).permute(0, 3, 1, 2).to(device)
+# test_images = torch.tensor(test_data['arr_0'], dtype=torch.float32).to(device)
 test_labels = torch.tensor(test_data['arr_1'], dtype=torch.long).to(device)
 
 # image_pipeline = [
@@ -41,20 +42,23 @@ test_labels = torch.tensor(test_data['arr_1'], dtype=torch.long).to(device)
 #         ToDevice(device)
 #     ]
 
-# label_pipeline = [ToTensor(), ToDevice(device)]
+# # label_pipeline = [ToTensor(), ToDevice(device)]
+# label_pipeline = [IntDecoder(), ToTensor(), ToDevice(device), Squeeze()]
 
 #     # Pipeline for each data field
 # pipelines = {
 #         'image': image_pipeline,
-#         'label': label_pipeline
+#         'label': label_pipeline,
+#         # 'is_backdoor': label_pipeline
 #     }
-# test_dataloader_path = "data/badnet/0.1/train_data_class_2.beton"
-# test_dataloader = Loader(test_dataloader_path, batch_size=256, num_workers=16,
-#                             order=OrderOption.RANDOM, pipelines=pipelines)
+# test_dataloader_path = "data/svhn/badnet/0.1/class_0_backdoor.beton"
+# test_dataloader = Loader(test_dataloader_path, batch_size=100, num_workers=4,
+#                             order=OrderOption.RANDOM, pipelines=pipelines, drop_last=False)
 # # 从数据加载器中获取所有数据
 # test_images = []
 # test_labels = []
 
+# # for batch, (images, labels, is_backdoor) in enumerate(test_dataloader):
 # for batch, (images, labels) in enumerate(test_dataloader):
 #     test_images.append(images)
 #     test_labels.append(labels)
@@ -66,10 +70,12 @@ test_labels = torch.tensor(test_data['arr_1'], dtype=torch.long).to(device)
 print(f"Total number of samples: {len(test_labels)}")
 print(f"Image shape: {test_images.shape}")
 print(f"Labels shape: {test_labels.shape}")
+print(test_images.max(), test_images.min())
 
 # 计算每个类别的样本数量
 unique, counts = np.unique(test_labels.cpu().numpy(), return_counts=True)
 class_distribution = dict(zip(unique, counts))
+print("Class distribution:", class_distribution)
 
 # 抽取每个类别1%的样本
 sampled_images = []
@@ -97,10 +103,11 @@ def imshow_grid(images, labels, title):
     elif grid_size > 1 and len(axes.shape) == 1:
         axes = axes.reshape((grid_size, grid_size))
     
-    print(images.max(), images.min())
+    # print(images.max(), images.min())
     for i, ax in enumerate(axes.flat):
         if i < num_images:
             # img = images[i] / 2 + 0.5  # unnormalize
+            # npimg = img.cpu().numpy()
             npimg = images[i].cpu().numpy()
             ax.imshow(np.transpose(npimg, (1, 2, 0)))
             ax.set_title(f'Label: {labels[i].item()}')
@@ -113,3 +120,6 @@ def imshow_grid(images, labels, title):
 for label in unique[:10]:  # 只展示前10个类别
     label_indices = (sampled_labels == label).nonzero(as_tuple=True)[0]
     imshow_grid(sampled_images[label_indices], sampled_labels[label_indices], f'Class {label} Samples')
+
+# imshow_grid(test_images[300:800], test_labels[300:800], 'Test Samples')
+# =================================================================================================

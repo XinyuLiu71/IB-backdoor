@@ -38,23 +38,31 @@ def load_npz_data(path: str) -> Tuple[np.ndarray, np.ndarray]:
     data = np.load(path)
     return data['arr_0'], data['arr_1']
 
-def create_tensor_dataset(images: np.ndarray, 
+def create_tensor_dataset(images: np.ndarray,
                          labels: np.ndarray,
+                         is_backdoor: torch.Tensor = None,
                          device: str = 'cpu') -> TensorDataset:
-    """Create standardized TensorDataset
+    """Create standardized TensorDataset with optional backdoor flag
     
     Args:
         images: Image data (N, H, W, C)
         labels: Label data (N,)
+        is_backdoor: Optional backdoor flag tensor (N,)
         device: Device for tensor storage
         
     Returns:
-        TensorDataset containing images and labels
+        TensorDataset containing images, labels, and optional backdoor flag
     """
-    return TensorDataset(
-        torch.tensor(images, dtype=torch.float32, device=device).permute(0, 3, 1, 2),
-        torch.tensor(labels, dtype=torch.long, device=device)
-    )
+    # Create base tensors
+    image_tensor = torch.tensor(images, dtype=torch.float32, device=device).permute(0, 3, 1, 2)
+    label_tensor = torch.tensor(labels, dtype=torch.long, device=device)
+    
+    # Add backdoor flag if provided
+    if is_backdoor is not None:
+        return TensorDataset(image_tensor, label_tensor, is_backdoor)
+    
+    return TensorDataset(image_tensor, label_tensor)
+
 
 def create_balanced_sample(backdoor_ds: TensorDataset,
                           clean_ds: TensorDataset,
@@ -116,7 +124,7 @@ def create_class_datasets(train_images: np.ndarray,
         cls0_labels = train_labels[cls0_mask]
         
         # Split poisoned and clean data
-        poison_num = int(len(cls0_images) * config.poison_rate)
+        poison_num = int(len(train_images) * config.poison_rate)
         datasets.update({
             'class_0_backdoor': create_tensor_dataset(
                 cls0_images[:poison_num], cls0_labels[:poison_num]),
@@ -148,7 +156,7 @@ def write_beton_dataset(dataset: TensorDataset,
     """
     writer = DatasetWriter(output_path, fields)
     writer.from_indexed_dataset(dataset)
-    print(f"Dataset successfully written: {dataset_name} -> {output_path}")
+    print(f"Dataset successfully written: {dataset_name} -> {output_path}, num_samples={len(dataset)}")
 
 def main(config: DatasetConfig):
     """Main processing pipeline"""
@@ -160,9 +168,15 @@ def main(config: DatasetConfig):
     train_images, train_labels = load_npz_data(config.train_path)
     test_images, test_labels = load_npz_data(config.test_path)
     
+    # Create backdoor flags for training data
+    total_samples = len(train_images)
+    poison_samples = int(total_samples * config.poison_rate)
+    is_backdoor = torch.zeros(total_samples, dtype=torch.long, device=device)
+    is_backdoor[:poison_samples] = 1
+    
     # Create base datasets
     base_datasets = {
-        'train': create_tensor_dataset(train_images, train_labels),
+        'train': create_tensor_dataset(train_images, train_labels, is_backdoor),
         'test': create_tensor_dataset(test_images, test_labels)
     }
     
@@ -174,13 +188,17 @@ def main(config: DatasetConfig):
         'image': TorchTensorField(dtype=torch.float32, shape=(3, 32, 32)), # image size depends on the dataset
         'label': IntField()
     }
+    TRAIN_FIELDS = {
+        **COMMON_FIELDS,
+        'is_backdoor': IntField()
+    }
     
     # Write datasets based on configuration
     if config.dataset_type in ('all', 'train'):
         write_beton_dataset(
             base_datasets['train'],
             config.output_dir/'train_data.beton',
-            {**COMMON_FIELDS, 'is_backdoor': IntField()},
+            TRAIN_FIELDS,
             'Training dataset'
         )
     

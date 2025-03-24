@@ -42,58 +42,58 @@ def stable_log_sum_exp(logits, dim=1):
     stable_logits = logits - max_logits
     log_sum_exp = (stable_logits.exp().mean(dim=dim)).log() + max_logits.squeeze(dim)
     return log_sum_exp
-# def compute_infoNCE(T, Y, Z, t, num_negative_samples=306):
-#     batch_size = Y.shape[0]
+def compute_infoNCE(T, Y, Z, t, num_negative_samples=256):
+    batch_size = Y.shape[0]
     
-#     # 随机选择负样本
-#     negative_indices = torch.randint(0, batch_size, (batch_size, num_negative_samples), device=Y.device)
-#     Z_negative = Z[negative_indices]
+    # 随机选择负样本
+    negative_indices = torch.randint(0, batch_size, (batch_size, num_negative_samples), device=Y.device)
+    Z_negative = Z[negative_indices]
     
-#     # 计算正样本的得分
-#     t_positive = t.squeeze()
-#     # 计算负样本的得分
-#     Y_expanded = Y.unsqueeze(1).expand(-1, num_negative_samples, -1)
-#     t_negative = T(Y_expanded.reshape(-1, Y.shape[1]), Z_negative.reshape(-1, Z.shape[1]))
-#     t_negative = t_negative.view(batch_size, num_negative_samples)
-    
-#     # 计算 InfoNCE loss
-#     logits = torch.cat([t_positive.unsqueeze(1), t_negative], dim=1)
-
-#     # log_sum_exp = logits.exp().mean(dim=1).log()
-#     log_sum_exp = stable_log_sum_exp(logits, dim=1)
-#     loss = -t_positive.mean() + log_sum_exp.mean()
-#     return loss
-
-def compute_infoNCE(T, Y, Z, t, num_negative_samples=512, batch_size=128):
-    total_samples = Y.shape[0]
+    # 计算正样本的得分
     t_positive = t.squeeze()
-    log_sum_exp_list = []
+    # 计算负样本的得分
+    Y_expanded = Y.unsqueeze(1).expand(-1, num_negative_samples, -1)
+    t_negative = T(Y_expanded.reshape(-1, Y.shape[1]), Z_negative.reshape(-1, Z.shape[1]))
+    t_negative = t_negative.view(batch_size, num_negative_samples)
     
-    for i in range(0, total_samples, batch_size):
-        end = min(i + batch_size, total_samples)
-        Y_batch = Y[i:end]
-        t_positive_batch = t_positive[i:end]
-        
-        # 随机选择负样本
-        negative_indices = torch.randint(0, total_samples, (end - i, num_negative_samples), device=Y.device)
-        Z_negative = Z[negative_indices]
-        
-        # 计算负样本的得分
-        Y_expanded = Y_batch.unsqueeze(1).expand(-1, num_negative_samples, -1)
-        t_negative = T(Y_expanded.reshape(-1, Y.shape[1]), Z_negative.reshape(-1, Z.shape[1]))
-        t_negative = t_negative.view(end - i, num_negative_samples)
-        
-        # 计算 InfoNCE loss（使用 LogSumExp 技巧来提高数值稳定性）
-        logits = torch.cat([t_positive_batch.unsqueeze(1), t_negative], dim=1)
-        # log_sum_exp = logits.exp().mean(dim=1).log()
-        log_sum_exp = torch.logsumexp(logits, dim=1)
-        log_sum_exp_list.append(log_sum_exp)
-    
-    log_sum_exp = torch.cat(log_sum_exp_list).mean()
-    # loss = -t_positive.mean() + log_sum_exp
-    loss = (-t_positive + log_sum_exp.mean()).mean()
-    
+    # 计算 InfoNCE loss
+    logits = torch.cat([t_positive.unsqueeze(1), t_negative], dim=1)
+
+    # log_sum_exp = logits.exp().mean(dim=1).log()
+    log_sum_exp = stable_log_sum_exp(logits, dim=1)
+    loss = -t_positive.mean() + log_sum_exp.mean()
     return loss
+
+# def compute_infoNCE(T, Y, Z, t, num_negative_samples=512, batch_size=128):
+#     total_samples = Y.shape[0]
+#     t_positive = t.squeeze()
+#     log_sum_exp_list = []
+    
+#     for i in range(0, total_samples, batch_size):
+#         end = min(i + batch_size, total_samples)
+#         Y_batch = Y[i:end]
+#         t_positive_batch = t_positive[i:end]
+        
+#         # 随机选择负样本
+#         negative_indices = torch.randint(0, total_samples, (end - i, num_negative_samples), device=Y.device)
+#         Z_negative = Z[negative_indices]
+        
+#         # 计算负样本的得分
+#         Y_expanded = Y_batch.unsqueeze(1).expand(-1, num_negative_samples, -1)
+#         t_negative = T(Y_expanded.reshape(-1, Y.shape[1]), Z_negative.reshape(-1, Z.shape[1]))
+#         t_negative = t_negative.view(end - i, num_negative_samples)
+        
+#         # 计算 InfoNCE loss（使用 LogSumExp 技巧来提高数值稳定性）
+#         logits = torch.cat([t_positive_batch.unsqueeze(1), t_negative], dim=1)
+#         # log_sum_exp = logits.exp().mean(dim=1).log()
+#         log_sum_exp = torch.logsumexp(logits, dim=1)
+#         log_sum_exp_list.append(log_sum_exp)
+    
+#     log_sum_exp = torch.cat(log_sum_exp_list).mean()
+#     # loss = -t_positive.mean() + log_sum_exp
+#     loss = (-t_positive + log_sum_exp.mean()).mean()
+    
+#     return loss
 
 # def compute_infoNCE(T, Y, Z, t, num_negative_samples=300):
 #     batch_size = Y.shape[0]

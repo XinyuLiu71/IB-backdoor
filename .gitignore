@@ -1,1 +1,3 @@
-./data
+data/
+wandb/
+results/badnet/**/best_model.pth

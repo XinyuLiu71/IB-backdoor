@@ -3,6 +3,7 @@ import numpy as np
 import math
 import os
 import matplotlib.pyplot as plt
+from scipy import stats
 
 def get_acc(outputs, labels):
     """calculate acc"""
@@ -56,11 +57,22 @@ def compute_infoNCE(T, Y, Z, num_negative_samples=256):
     
     return loss, diffs
 
-def dynamic_early_stop(M, patience=50, delta=1e-3):
-    if len(M) > patience:
-        recent_M = M[-patience:]
-        if max(recent_M) - min(recent_M) < delta:
-            return True
+# Improved early stopping with better convergence criteria
+def dynamic_early_stop(values, window=10, delta=1e-3, patience=5):
+    if len(values) < window + patience:
+        return False
+    
+    recent_values = values[-window:]
+    slope, _, r_value, _, _ = stats.linregress(range(window), recent_values)
+    
+    # Check both the slope and the absolute change
+    if abs(slope) < delta and max(recent_values) - min(recent_values) < delta:
+        # Check if we're stuck at this plateau for 'patience' iterations
+        if len(values) >= window + patience:
+            plateau_values = values[-(window+patience):-window]
+            plateau_range = max(plateau_values) - min(plateau_values)
+            if plateau_range < delta:
+                return True
     return False
 
 def compute_class_accuracy(model, dataloader, num_classes):

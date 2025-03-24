@@ -11,10 +11,14 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "args": [
-                "--train_data_path=data/badnet_/0.1/train_data.beton",
-                "--test_data_path=data/badnet_/0.1/test_data.beton",
-                "--sample_data_path=data/badnet_/0.1/observe_data",
-                "--outputs_dir=results/ob_infoNCE_09_22_0.1"
+                // "--train_data_path=data/badnet_/0.1/train_data.beton",
+                // "--test_data_path=data/badnet_/0.1/test_data.beton",
+                // "--sample_data_path=data/badnet_/0.1/observe_data",
+                // "--outputs_dir=results/ob_infoNCE_09_22_0.1"
+                "--output_path", "data/svhn/badnet/0.1",
+                "--dataset", "all",
+                "--train_data_path", "data/svhn/badnet/0.1/badnet_0.1.npz",
+                "--test_data_path", "data/svhn/badnet/0.1/test_data.npz"
             ]
         }
     ]
