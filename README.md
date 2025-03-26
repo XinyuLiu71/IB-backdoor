@@ -1,4 +1,4 @@
-# Mutual Information Analysis for Backdoor Detection
+# Mutual Information Analysis for Backdoor Training
 
 **Paper: Exploring Dynamic Properties of Backdoor Training Through Information Bottleneck**
 
