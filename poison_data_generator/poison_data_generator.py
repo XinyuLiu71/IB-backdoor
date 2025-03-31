@@ -40,25 +40,25 @@ def get_dataset(name, train=True, download=True, root='../data'):
             download=download, transform=transform
         )
         
-        # 对训练集进行采样，每个类别只保留前4000个样本
+        # Sample the training set, keeping only the first 4000 samples per class
         if train:
-            # 获取所有标签
+            # Get all labels
             all_labels = dataset.labels
-            # 创建新的数据列表
+            # Create new data list
             new_data = []
             new_labels = []
             
-            # 对每个类别进行处理
+            # Process each class
             for label in range(10):
-                # 获取当前类别的所有索引
+                # Get all indices for current class
                 indices = np.where(all_labels == label)[0]
-                # 只保留前4000个样本
+                # Keep only the first 4000 samples
                 selected_indices = indices[:DATASET_CONFIGS[name]['sample_size_per_class']]
-                # 添加选中的样本
+                # Add selected samples
                 new_data.extend([dataset.data[i] for i in selected_indices])
                 new_labels.extend([dataset.labels[i] for i in selected_indices])
             
-            # 更新数据集
+            # Update dataset
             dataset.data = np.array(new_data)
             dataset.labels = np.array(new_labels)
             
@@ -74,7 +74,7 @@ def get_dataset(name, train=True, download=True, root='../data'):
         pass # Add more datasets here
     return dataset
 
-# 新增的函数：获取触发器掩码
+# Get trigger mask
 def get_trigger_mask(img_size, total_pieces, masked_pieces):
     div_num = int(np.sqrt(total_pieces))
     step = int(img_size // div_num)
@@ -115,7 +115,7 @@ class TriggerGenerator:
         Returns:
             Poisoned image with adaptively blended trigger
         """
-        # 应用触发器掩码来确定哪些区域应用触发器
+        # Apply trigger mask to determine which areas to apply the trigger
         effective_mask = mask * trigger_mask
         poisoned_image = (1 - alpha) * image + alpha * effective_mask
         return poisoned_image
@@ -240,12 +240,12 @@ class PoisonDatasetGenerator:
         elif attack_type == 'label_consistent':
             self._init_label_consistent_attack()
         elif attack_type == 'adaptive_blend':
-            self.conservatism_ratio = 0.5  # 默认50%的毒化样本保留原始标签
-            self.pieces = 16  # 默认将触发器分为4x4=16块
-            self.mask_rate = 0.5  # 默认随机遮挡50%的触发器块
+            self.conservatism_ratio = 0.5  # Default: 50% of poisoned samples keep original labels
+            self.pieces = 16  # Default: divide trigger into 4x4=16 blocks
+            self.mask_rate = 0.5  # Default: randomly mask 50% of trigger blocks
             self.masked_pieces = int(self.mask_rate * self.pieces)
-            self.train_alpha = 0.15  # 训练时使用较低的不透明度
-            self.test_alpha = 0.2   # 测试时使用较高的不透明度
+            self.train_alpha = 0.15  # Use lower opacity during training
+            self.test_alpha = 0.2   # Use higher opacity during testing
 
     def _init_wanet_params(self):
         """Initialize WaNet-specific grid parameters"""
@@ -333,18 +333,17 @@ class PoisonDatasetGenerator:
 
     def add_trigger(self, image, amplitude=0, is_test=False):
         if self.attack_type == 'label_consistent':
-            # 处理输入图像
+            # Process input image
             image_tensor = torch.from_numpy(image).float()
             image_tensor = image_tensor.permute(2, 0, 1).unsqueeze(0).to(device)
-            # 处理目标类别 - 修改这部分
-            target = torch.tensor([self.target_class], dtype=torch.long).to(device)  # 添加batch维度并移至相同设备
-            # 进行对抗攻击
+            # Process target class - modify this part
+            target = torch.tensor([self.target_class], dtype=torch.long).to(device)  # Add batch dimension and move to same device
+            # Perform adversarial attack
             adv_image = self.attacker.perturb(image_tensor, target)
-            # 转回numpy格式
+            # Convert back to numpy format
             adv_image = adv_image.squeeze(0).permute(1, 2, 0).cpu().numpy()
             
             return self.trigger_generator.label_consistent_trigger(adv_image, amplitude)
-            # return adv_image
         elif self.attack_type == 'blend':
             mask = np.load('trigger/Blendnoise.npy') / 255.0
             mask = np.expand_dims(mask, axis=-1)
@@ -353,10 +352,10 @@ class PoisonDatasetGenerator:
             mask = np.load('trigger/Blendnoise.npy') / 255.0
             mask = np.expand_dims(mask, axis=-1)
             if is_test:
-                # 测试时使用完整触发器和更高的不透明度
+                # Use complete trigger and higher opacity for testing
                 return self.trigger_generator.blend_trigger(image, mask, alpha=self.test_alpha)
             else:
-                # 训练时使用部分触发器和较低的不透明度
+                # Use partial trigger and lower opacity for training
                 img_size = DATASET_CONFIGS[self.dataset]['img_size']
                 trigger_mask = get_trigger_mask(img_size, self.pieces, self.masked_pieces)
                 return self.trigger_generator.adaptive_blend_trigger(image, mask, trigger_mask, alpha=self.train_alpha)
@@ -392,50 +391,50 @@ class PoisonDatasetGenerator:
             poisoned_test_images = np.array([self.trigger_generator.label_consistent_trigger(img, amplitude=1) for img in poisoned_test_images])
 
         elif self.attack_type == 'adaptive_blend':
-            # 按照与原本逻辑相似但有所调整的方式进行毒化
+            # Follow similar logic but with adjustments for poisoning
             poison_count = int(self.poison_percentage * len(train_images))  # n% of train dataset
             clean_data_num = samples_per_class - int(poison_count // n_classes)
             class_0_clean = train_images[train_labels == 0][:clean_data_num]
             
             poison_classes = np.arange(0, n_classes)
             poison_images = []
-            poison_labels = []  # 新增：记录毒化样本的标签
+            poison_labels = []  # New: record labels for poisoned samples
 
             for _class in poison_classes:
-                # 获取该类的样本进行毒化
+                # Get samples from this class for poisoning
                 imgs = train_images[train_labels == _class][-int(poison_count / n_classes):]
                 imgs_labels = np.full(len(imgs), _class, dtype=np.int64)
                 
-                # 计算保留原始标签的样本数量和payload样本数量
+                # Calculate number of samples to keep original labels and payload samples
                 samples_per_poison_class = len(imgs)
                 regularization_count = int(samples_per_poison_class * self.conservatism_ratio)
                 payload_count = samples_per_poison_class - regularization_count
                 
-                # 对于每个样本
+                # For each sample
                 for idx in range(imgs.shape[0]):
-                    # 添加自适应触发器
+                    # Add adaptive trigger
                     imgs[idx] = self.add_trigger(imgs[idx])
                     
-                    # 前payload_count个样本标签改为目标类，其余保持原始标签
+                    # First payload_count samples change label to target class, others keep original label
                     if idx < payload_count:
                         imgs_labels[idx] = self.target_class
-                    # 剩余的regularization_count个样本保持原始标签
+                    # Remaining regularization_count samples keep original label
                 
                 poison_images.append(imgs)
                 poison_labels.append(imgs_labels)
 
-            # 整合所有毒化样本
+            # Combine all poisoned samples
             merged_poison_images = np.concatenate(poison_images, axis=0)
             merged_poison_labels = np.concatenate(poison_labels, axis=0)
 
-            # 准备1-9类的干净数据
+            # Prepare clean data for classes 1-9
             clean_images, clean_labels = self.prepare_clean_data(train_images, train_labels, clean_data_num)
 
-            # 合并毒化和干净数据
+            # Combine poisoned and clean data
             blend_images = np.concatenate([merged_poison_images, class_0_clean, clean_images], axis=0)
             blend_labels = np.concatenate([merged_poison_labels, np.zeros(len(class_0_clean)), clean_labels], axis=0)
 
-            # 处理测试集图像
+            # Process test set images
             poisoned_test_images = test_images.copy()
             poisoned_test_images = np.array([self.add_trigger(img, is_test=True) for img in tqdm(poisoned_test_images)])
         else:
@@ -507,7 +506,7 @@ if __name__ == '__main__':
         args.data_dir
     )
     
-    # 如果是自适应混合攻击，设置conservatism_ratio
+    # If using adaptive blend attack, set conservatism_ratio
     if args.attack_type == 'adaptive_blend':
         generator.conservatism_ratio = args.conservatism_ratio
         

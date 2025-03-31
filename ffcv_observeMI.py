@@ -206,7 +206,7 @@ def test_loop(dataloader, model, loss_fn):
         print(f"Error during testing: {str(e)}")
         raise
 
-# 定义钩子函数
+# Define hook function for feature extraction
 def hook(module, input, output):
     global last_conv_output
     last_conv_output = output.detach()
@@ -374,7 +374,7 @@ def train(args, config, flag='inputs-vs-outputs', mode='infoNCE'):
     learning_rate = config.training.learning_rate  
     # learning_rate = 0.1
 
-    # 动态设置 num_workers
+    # Dynamically set number of workers based on system resources
     num_workers = config.training.num_workers
 
     # Data decoding and augmentation
@@ -415,21 +415,20 @@ def train(args, config, flag='inputs-vs-outputs', mode='infoNCE'):
                         noise_std_xt=config.model.noise_std_xt, 
                         noise_std_ty=config.model.noise_std_ty)  
         model.conv1 = nn.Conv2d(in_channels=3, out_channels=64, kernel_size=3, stride=1, padding=1, bias=False)
-        model.fc = torch.nn.Linear(512, num_classes) # 将最后的全连接层改掉
+        model.fc = torch.nn.Linear(512, num_classes)  # Modify the final fully connected layer
     elif config.model.model_type == 'vgg16':
         model = VGG16(num_classes=num_classes, 
                      noise_std_xt=config.model.noise_std_xt, 
                      noise_std_ty=config.model.noise_std_ty)
     else:
         raise ValueError(f"Unsupported model architecture: {config.model.model_type}")
-    # model = nn.DataParallel(model)  # 使用 DataParallel
+    # model = nn.DataParallel(model)  # Use DataParallel for multi-GPU training
     model.to(device)
     model.train()
 
     loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=5e-4)
     
-    # 使用 StepLR 调整学习率，每10个epoch，lr乘0.5
     # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True)
 
@@ -441,7 +440,7 @@ def train(args, config, flag='inputs-vs-outputs', mode='infoNCE'):
     class_losses_list = []
     previous_test_loss = float('inf')
 
-    # 初始化 wandb
+    # Initialize Weights & Biases for experiment tracking
     wandb.init(
         project=config.wandb.project_name,
         name=f"{config.model.model_type}_xt{config.model.noise_std_xt}_ty{config.model.noise_std_ty}_{args.outputs_dir.split('/')[-2]}_{args.train_data_path.split('/')[-2]}",
@@ -471,7 +470,6 @@ def train(args, config, flag='inputs-vs-outputs', mode='infoNCE'):
         # if epoch in [5, 10, 20, 40, 60, 80, 120]:
         #     plot_tsne(t, labels, is_backdoor, epoch, args.outputs_dir)
 
-        # 创建一个包含所有类别损失的图表
         wandb.log({
             "train_accuracy": train_acc,
             "test_accuracy": test_acc,
@@ -501,9 +499,9 @@ def train(args, config, flag='inputs-vs-outputs', mode='infoNCE'):
             mi_inputs_vs_outputs_dict = {}
             mi_Y_vs_outputs_dict = {}
             model_state_dict = model.state_dict()
-            # 创建一个进程池
+            # Create a process pool for parallel MI estimation
             with concurrent.futures.ProcessPoolExecutor(max_workers=len(config.observe_classes)) as executor:
-                # 计算 I(X,T) 和 I(T,Y)
+                # Calculate I(X,T) and I(T,Y) in parallel
                 compute_args = [(config, 'inputs-vs-outputs', model_state_dict, class_idx, mode) 
                                  for class_idx in config.observe_classes]
                 results_inputs_vs_outputs = list(executor.map(estimate_mi_wrapper, compute_args))
@@ -513,7 +511,7 @@ def train(args, config, flag='inputs-vs-outputs', mode='infoNCE'):
                                  for class_idx in config.observe_classes]
                 results_Y_vs_outputs = list(executor.map(estimate_mi_wrapper, compute_args))
 
-            # 处理结果
+            # Process results and store MI estimates
             for class_idx, result in zip(config.observe_classes, results_inputs_vs_outputs):
                 mi_inputs_vs_outputs = result
                 mi_inputs_vs_outputs_dict[class_idx] = mi_inputs_vs_outputs
@@ -524,20 +522,20 @@ def train(args, config, flag='inputs-vs-outputs', mode='infoNCE'):
                 mi_Y_vs_outputs_dict[class_idx] = mi_Y_vs_outputs
                 MI_Y_vs_outputs[class_idx].append(mi_Y_vs_outputs)
 
-            # 保存 MI 图到 wandb
+            # Save MI plots to wandb
             plot_and_save_mi(mi_inputs_vs_outputs_dict, 'inputs-vs-outputs', args.outputs_dir, epoch)
             plot_and_save_mi(mi_Y_vs_outputs_dict, 'outputs-vs-Y', args.outputs_dir, epoch)
 
             np.save(f'{args.outputs_dir}/infoNCE_MI_I(X,T).npy', MI_inputs_vs_outputs)
             np.save(f'{args.outputs_dir}/infoNCE_MI_I(Y,T).npy', MI_Y_vs_outputs)
 
-            # 上传图片到 wandb
+            # Upload plots to Weights & Biases
             wandb.log({
                 f"I(X;T)_estimation": wandb.Image(os.path.join(args.outputs_dir, f'mi_plot_inputs-vs-outputs_epoch_{epoch}.png')),
                 f"I(T;Y)_estimation": wandb.Image(os.path.join(args.outputs_dir, f'mi_plot_outputs-vs-Y_epoch_{epoch}.png'))
             }, step=epoch)
 
-        # 更新前一个epoch的test_loss
+        # Update previous epoch's test loss for learning rate scheduling
         previous_test_loss = test_loss
 
     plot_train_loss_by_class(class_losses_list, epoch, num_classes, args.outputs_dir)
