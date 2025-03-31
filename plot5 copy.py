@@ -98,15 +98,15 @@ def main(args):
     directory = args.directory
     epochs = generate_epochs_from_files(directory)
 
-    MI_inputs_vs_outputs = np.load(f"{directory}/infoNCE_MI_I(X,T)_120.npy", allow_pickle=True).item()
-    MI_Y_vs_outputs = np.load(f"{directory}/infoNCE_MI_I(Y,T)_120.npy", allow_pickle=True).item()
+    MI_inputs_vs_outputs = np.load(f"{directory}/infoNCE_MI_I(X,T)_c.npy", allow_pickle=True).item()
+    MI_Y_vs_outputs = np.load(f"{directory}/infoNCE_MI_I(Y,T)_c.npy", allow_pickle=True).item()
 
     plot_combined_mi(MI_inputs_vs_outputs, MI_Y_vs_outputs, args, epochs)
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Plot Information Plane")
-    parser.add_argument("--directory", type=str, default="results/blend/ob_infoNCE_11_32_0.1_0.4+0.4",
+    parser.add_argument("--directory", type=str, default="results/cifar10/blend/ob_infoNCE_13_28_0.1_0.1+0.1",
                         help="Directory containing the data files")
     args = parser.parse_args()
     main(args)

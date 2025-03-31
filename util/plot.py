@@ -125,6 +125,10 @@ def plot_tsne(t, labels, is_backdoor, epoch, outputs_dir, prefix='t'):
     
     combined_labels = labels.cpu().numpy().copy()
     combined_labels[is_backdoor.cpu().numpy() == 1] = 10  # 10 代表 backdoor 类别
+
+    np.save(os.path.join(outputs_dir, f'tsne_{prefix}_epoch_{epoch}.npy'), t_tsne)
+    np.save(os.path.join(outputs_dir, f'labels_{prefix}_epoch_{epoch}.npy'), combined_labels)
+    np.save(os.path.join(outputs_dir, f'is_backdoor_{prefix}_epoch_{epoch}.npy'), is_backdoor.cpu().numpy())
     
     # 创建一个颜色映射，0-9 是类别，10 是 backdoor
     palette = sns.color_palette("tab10", n_colors=10)  # 使用 10 个颜色表示 10 个类别

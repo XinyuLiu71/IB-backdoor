@@ -41,20 +41,20 @@ def plot_tsne(t_tsne, labels, is_backdoor, epoch, outputs_dir, prefix='t'):
                                       markerfacecolor='red', markersize=20))
 
     # 调整图例位置为多行多列
-    plt.legend(
-        handles=custom_lines, 
-        labels=legend_labels, 
-        loc="lower center",  # 图例放置在图形下方
-        # bbox_to_anchor=(0.5, -0.2),  # 图例的位置偏移
-        ncol=4,  # 设置为 6 列
-        fontsize=40,  # 图例字体大小
-        frameon=True, 
-        fancybox=True,  # 圆角边框
-        shadow=False,  # 无阴影
-        columnspacing=0.1,  # 列间距
-        handletextpad=0.1,  # 线条与文字的间距
-        labelspacing=0.1  # 图例项之间的间距
-    )
+    # plt.legend(
+    #     handles=custom_lines, 
+    #     labels=legend_labels, 
+    #     loc="lower center",  # 图例放置在图形下方
+    #     # bbox_to_anchor=(0.5, -0.2),  # 图例的位置偏移
+    #     ncol=4,  # 设置为 6 列
+    #     fontsize=40,  # 图例字体大小
+    #     frameon=True, 
+    #     fancybox=True,  # 圆角边框
+    #     shadow=False,  # 无阴影
+    #     columnspacing=0.1,  # 列间距
+    #     handletextpad=0.1,  # 线条与文字的间距
+    #     labelspacing=0.1  # 图例项之间的间距
+    # )
 
     # 保存图像
     save_path = os.path.join(outputs_dir, f'tsne_{prefix}_epoch_{epoch}_improved.png')
@@ -65,8 +65,8 @@ def plot_tsne(t_tsne, labels, is_backdoor, epoch, outputs_dir, prefix='t'):
 
 # 输入参数
 prefix = 't'
-epoch = 5
-outputs_dir = 'results/label_consistent/ob_infoNCE_13_8_0.25_0.4+0.4'
+epoch = 40
+outputs_dir = 'results/cifar10/adaptive_blend/ob_infoNCE_13_29_0.1_0.4+0.4'
 
 # 加载数据
 t_tsne = np.load(os.path.join(outputs_dir, f'tsne_{prefix}_epoch_{epoch}.npy'))

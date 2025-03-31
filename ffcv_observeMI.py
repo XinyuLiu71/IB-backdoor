@@ -35,6 +35,7 @@ from tqdm import tqdm
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import copy
 import wandb
 from sklearn.decomposition import PCA
 from openTSNE import TSNE
@@ -135,7 +136,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, num_classes, config):
             # Store batch data
             batch_size = len(Y)
             end_idx = current_idx + batch_size
-            
+
             features[current_idx:end_idx] = M_output
             predictions[current_idx:end_idx] = pred
             labels[current_idx:end_idx] = Y
@@ -323,9 +324,9 @@ def estimate_mi(config, device, flag, model_state_dict, sample_loader, class_idx
             scheduler.step(avg_loss)
             
             # Early stopping check
-            if dynamic_early_stop(M, delta=config.mi_estimation.early_stop_delta):
-                print(f'Early stopping at epoch {epoch + 1}')
-                break
+            # if dynamic_early_stop(M, delta=config.mi_estimation.early_stop_delta):
+            #     print(f'Early stopping at epoch {epoch + 1}')
+            #     break
                 
     except Exception as e:
         print(f"Error during MI estimation: {str(e)}")
@@ -372,9 +373,6 @@ def train(args, config, flag='inputs-vs-outputs', mode='infoNCE'):
     batch_size = config.training.batch_size
     learning_rate = config.training.learning_rate  
     # learning_rate = 0.1
-
-    # Save sample path to config for the wrapper
-    config.data.sample_path = args.sample_data_path
 
     # 动态设置 num_workers
     num_workers = config.training.num_workers
@@ -482,23 +480,21 @@ def train(args, config, flag='inputs-vs-outputs', mode='infoNCE'):
         }, step=epoch)
 
         # 保存最佳模型
-        # if test_acc > best_accuracy:
-        #     best_accuracy = test_acc
-        #     best_model = copy.deepcopy(model)
-        #     print(f"New best model saved with accuracy: {best_accuracy:.2f}%")
+        if test_acc > best_accuracy:
+            best_accuracy = test_acc
+            best_model = copy.deepcopy(model)
+            torch.save(best_model, os.path.join(args.outputs_dir, 'best_model.pth'))
+            print(f"New best model saved with accuracy: {best_accuracy:.2f}%")
 
         # 调整学习率
         scheduler.step(test_loss)
         
         # 检查是否应该计算互信息
-        # should_compute_mi = ((t % pow(2, t//10) == 0) or t%10==0) and test_loss < previous_test_loss
-        # should_compute_mi = (t % pow(2, t//10) == 0) and (test_loss < previous_test_loss if t < 10 else True)
-        # should_compute_mi = test_loss < previous_test_loss
-        # should_compute_mi = t==1 or t==8 or t==15 or t==25 or t==40 or t==60
-        # should_compute_mi = epoch in [1, 5, 10, 20, 40, 60, 80, 100, 120]
+        should_compute_mi = epoch in [1, 5, 10, 20, 40, 60, 80, 100, 120]
         # should_compute_mi = epoch in [1, 3, 8, 10, 20, 30, 50]
-        should_compute_mi = epoch in [1, 3, 5, 8, 10, 20, 40, 60]
+        # should_compute_mi = epoch in [1, 3, 5, 8, 10, 20, 40, 60]
         # should_compute_mi = epoch in [10, 40]
+        # should_compute_mi = epoch in [80, 100, 120]
         # should_compute_mi = False
         if should_compute_mi:
             print(f"------------------------------- Epoch {epoch} -------------------------------")
@@ -553,27 +549,6 @@ def train(args, config, flag='inputs-vs-outputs', mode='infoNCE'):
     return MI_inputs_vs_outputs, MI_Y_vs_outputs, best_model
 
 
-def ob_infoNCE(args):
-    outputs_dir = args.outputs_dir
-    if not os.path.exists(outputs_dir):
-        os.makedirs(outputs_dir)
-    infoNCE_MI_log_inputs_vs_outputs, infoNCE_MI_log_Y_vs_outputs, best_model = train(
-        args, 'inputs-vs-outputs', 'infoNCE'
-    )
-     
-    # 保存最佳模型
-    # torch.save(best_model, os.path.join(args.outputs_dir, 'best_model.pth'))
-
-    # 检查并保存 infoNCE_MI_log_inputs_vs_outputs
-    infoNCE_MI_log_inputs_vs_outputs = np.array(infoNCE_MI_log_inputs_vs_outputs, dtype=object)
-    np.save(f'{outputs_dir}/infoNCE_MI_I(X,T).npy', infoNCE_MI_log_inputs_vs_outputs)
-    print(f'saved in {outputs_dir}/infoNCE_MI_I(X,T).npy')
-    
-    # 检查并保存 infoNCE_MI_log_Y_vs_outputs
-    infoNCE_MI_log_Y_vs_outputs = np.array(infoNCE_MI_log_Y_vs_outputs, dtype=object)
-    np.save(f'{outputs_dir}/infoNCE_MI_I(Y,T).npy', infoNCE_MI_log_Y_vs_outputs)
-    print(f'saved in {outputs_dir}/infoNCE_MI_I(Y,T).npy')
-
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description='Mutual Information Analysis for Backdoor Detection')
@@ -586,7 +561,7 @@ def parse_args():
     parser.add_argument('--test_data_path', type=str, required=True,
                       help='Path to test data')
     parser.add_argument('--test_poison_data_path', type=str,
-                      default="data/svhn/wanet/0.1/poisoned_test_data.npz",
+                      default="data/cifar10/adaptive_blend/0.1/poisoned_test_data.npz",
                       help='Path to poisoned test data')
     parser.add_argument('--sample_data_path', type=str,
                       default='data/train_dataset.beton',
@@ -599,8 +574,8 @@ def parse_args():
     # Override config parameters
     parser.add_argument('--model', type=str, choices=['resnet18', 'vgg16'], default='resnet18',
                       help='Model architecture')
-    parser.add_argument('--attack_type', type=str, default='wanet',
-                      choices=['blend', 'badnet', 'wanet', 'label_consistent'],
+    parser.add_argument('--attack_type', type=str, default='adaptive_blend',
+                      choices=['blend', 'badnet', 'wanet', 'label_consistent', 'adaptive_blend'],
                       help='Type of backdoor attack')
     parser.add_argument('--noise_std_xt', type=float, default=0.4,
                       help='Noise standard deviation for input features')
@@ -633,6 +608,8 @@ def main():
         config.model.noise_std_ty = args.noise_std_ty
     if args.observe_classes:
         config.observe_classes = args.observe_classes
+    if args.sample_data_path:
+        config.data.sample_path = args.sample_data_path
     
     # Create output directory
     if not os.path.exists(args.outputs_dir):

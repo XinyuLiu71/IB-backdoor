@@ -117,8 +117,8 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plot Information Plane")
-    parser.add_argument("--directory", type=str, default="results/blend/ob_infoNCE_11_32_0.1_0.4+0.4", help="Directory containing the data files")
-    parser.add_argument("--directory2", type=str, default="results/blend/ob_infoNCE_12_01_0.1_0.4+0.4", help="Directory containing the data files")
+    parser.add_argument("--directory", type=str, default="results/cifar10/blend/ob_infoNCE_13_28_0.1_0.1+0.1", help="Directory containing the data files")
+    parser.add_argument("--directory2", type=str, default="results/cifar10/blend/ob_infoNCE_13_281_0.1_0.1+0.1", help="Directory containing the data files")
     parser.add_argument("--observe_class", type=list, default=[0,1,2,3,4,5,6,7,8,9], help="Class to observe")
     args = parser.parse_args()
 

@@ -12,8 +12,8 @@ from typing import List, Union
 class TrainingConfig:
     """Training configuration parameters."""
     batch_size: int = 256
-    learning_rate: float = 0.01
-    epochs: int = 60
+    learning_rate: float = 0.1
+    epochs: int = 120
     num_workers: int = 16
     weight_decay: float = 5e-4
     momentum: float = 0.9
@@ -33,20 +33,20 @@ class ModelConfig:
 class MIEstimationConfig:
     """Mutual Information estimation parameters."""
     epochs: int = 350  # for inputs-vs-outputs
-    epochs_y: int = 250  # for outputs-vs-Y
+    epochs_y: int = 200  # for outputs-vs-Y
     initial_lr: float = 3e-4  # for inputs-vs-outputs
     initial_lr_y: float = 5e-4  # for outputs-vs-Y
     weight_decay: float = 1e-4
     grad_clip: float = 5.0
     early_stop_delta: float = 1e-2
-    num_negative_samples: int = 512  # for inputs-vs-outputs
+    num_negative_samples: int = 256  # for inputs-vs-outputs
     num_negative_samples_y: int = 256  # for outputs-vs-Y
 
 @dataclass
 class DataConfig:
     """Data loading and processing parameters."""
     # sampling_datasize: int = 1000
-    total_samples: int = 40000
+    total_samples: int = 50000
     feature_dim: int = 512
     mi_compute_epochs: List[int] = None
 

@@ -1,4 +1,4 @@
-# Mutual Information Analysis for Backdoor Detection
+# Mutual Information Analysis for Backdoor Training
 
 **Paper: Exploring Dynamic Properties of Backdoor Training Through Information Bottleneck**
 
@@ -17,6 +17,7 @@ This repository implements mutual information analysis techniques when neural ne
 - Includes early stopping and learning rate scheduling
 - Integrates with Weights & Biases for experiment tracking
 - Uses FFCV for efficient data loading
+- Calculates MI bounds between inputs, labels, and outputs
 
 ## Installation
 
@@ -37,6 +38,7 @@ pip install -r requirements.txt
 IB-backdoor/
 ├── config.py                 # Configuration settings
 ├── ffcv_observeMI.py        # Main training and MI analysis script
+├── MI_bound.py              # MI bound calculation script
 ├── plot.py                  # Visualization utilities
 ├── poison_data_generator/   # Backdoor dataset generation
 │   └── poison_data_generator.py
@@ -86,6 +88,9 @@ python ffcv_observeMI.py \
 
 # 4. Plot results
 python plot.py --directory="results/cifar10/badnet/ob_infoNCE_01_30_0.1_0.4+0.4"
+
+# 5. Calculate MI bounds (optional)
+python MI_bound.py
 ```
 
 ### Configuration
@@ -119,6 +124,7 @@ The project generates several types of visualizations:
    - Intermediate representations and outputs (I(T;Y))
 2. Training loss by class
 3. Information plane visualization
+4. MI bounds between inputs, labels, and outputs
 
 ## Citation
 

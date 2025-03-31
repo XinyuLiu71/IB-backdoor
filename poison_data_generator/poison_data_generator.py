@@ -1,7 +1,6 @@
 import numpy as np
 import os
 import argparse
-# from tensorflow.keras.datasets import cifar10
 import torch
 import torch.nn.functional as F
 from copy import deepcopy
@@ -11,6 +10,7 @@ from tqdm import tqdm
 from pgd_attack import PgdAttack
 from torchvision import transforms
 from torchvision import datasets
+import random
 
 # Device configuration
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -74,6 +74,18 @@ def get_dataset(name, train=True, download=True, root='../data'):
         pass # Add more datasets here
     return dataset
 
+# 新增的函数：获取触发器掩码
+def get_trigger_mask(img_size, total_pieces, masked_pieces):
+    div_num = int(np.sqrt(total_pieces))
+    step = int(img_size // div_num)
+    candidate_idx = random.sample(list(range(total_pieces)), k=masked_pieces)
+    mask = np.ones((img_size, img_size, 1))
+    for i in candidate_idx:
+        x = int(i % div_num)  # column
+        y = int(i // div_num)  # row
+        mask[y * step: (y + 1) * step, x * step: (x + 1) * step] = 0
+    return mask
+
 class TriggerGenerator:
     """Generates different types of backdoor triggers for image poisoning"""
     
@@ -89,6 +101,23 @@ class TriggerGenerator:
             Poisoned image with blended trigger
         """
         poisoned_image = (1 - alpha) * image + alpha * mask
+        return poisoned_image
+    
+    @staticmethod
+    def adaptive_blend_trigger(image: np.ndarray, mask: np.ndarray, trigger_mask: np.ndarray, alpha: float = 0.15) -> np.ndarray:
+        """
+        Apply adaptive blend trigger using alpha blending with partial masking
+        Args:
+            image: Original image in [H, W, C] format
+            mask: Trigger pattern to blend
+            trigger_mask: Mask indicating which parts of the trigger to apply
+            alpha: Blending ratio (0-1), smaller than standard blend for training
+        Returns:
+            Poisoned image with adaptively blended trigger
+        """
+        # 应用触发器掩码来确定哪些区域应用触发器
+        effective_mask = mask * trigger_mask
+        poisoned_image = (1 - alpha) * image + alpha * effective_mask
         return poisoned_image
 
     @staticmethod
@@ -210,6 +239,13 @@ class PoisonDatasetGenerator:
             self._init_wanet_params()
         elif attack_type == 'label_consistent':
             self._init_label_consistent_attack()
+        elif attack_type == 'adaptive_blend':
+            self.conservatism_ratio = 0.5  # 默认50%的毒化样本保留原始标签
+            self.pieces = 16  # 默认将触发器分为4x4=16块
+            self.mask_rate = 0.5  # 默认随机遮挡50%的触发器块
+            self.masked_pieces = int(self.mask_rate * self.pieces)
+            self.train_alpha = 0.15  # 训练时使用较低的不透明度
+            self.test_alpha = 0.2   # 测试时使用较高的不透明度
 
     def _init_wanet_params(self):
         """Initialize WaNet-specific grid parameters"""
@@ -295,7 +331,7 @@ class PoisonDatasetGenerator:
         
         return (train_images, train_labels), (test_images, test_labels)
 
-    def add_trigger(self, image, amplitude=0):
+    def add_trigger(self, image, amplitude=0, is_test=False):
         if self.attack_type == 'label_consistent':
             # 处理输入图像
             image_tensor = torch.from_numpy(image).float()
@@ -313,6 +349,17 @@ class PoisonDatasetGenerator:
             mask = np.load('trigger/Blendnoise.npy') / 255.0
             mask = np.expand_dims(mask, axis=-1)
             return self.trigger_generator.blend_trigger(image, mask)
+        elif self.attack_type == 'adaptive_blend':
+            mask = np.load('trigger/Blendnoise.npy') / 255.0
+            mask = np.expand_dims(mask, axis=-1)
+            if is_test:
+                # 测试时使用完整触发器和更高的不透明度
+                return self.trigger_generator.blend_trigger(image, mask, alpha=self.test_alpha)
+            else:
+                # 训练时使用部分触发器和较低的不透明度
+                img_size = DATASET_CONFIGS[self.dataset]['img_size']
+                trigger_mask = get_trigger_mask(img_size, self.pieces, self.masked_pieces)
+                return self.trigger_generator.adaptive_blend_trigger(image, mask, trigger_mask, alpha=self.train_alpha)
         elif self.attack_type == 'badnet':
             return self.trigger_generator.badnet_trigger(image)
         elif self.attack_type == 'wanet':
@@ -344,6 +391,53 @@ class PoisonDatasetGenerator:
             poisoned_test_images = test_images.copy()
             poisoned_test_images = np.array([self.trigger_generator.label_consistent_trigger(img, amplitude=1) for img in poisoned_test_images])
 
+        elif self.attack_type == 'adaptive_blend':
+            # 按照与原本逻辑相似但有所调整的方式进行毒化
+            poison_count = int(self.poison_percentage * len(train_images))  # n% of train dataset
+            clean_data_num = samples_per_class - int(poison_count // n_classes)
+            class_0_clean = train_images[train_labels == 0][:clean_data_num]
+            
+            poison_classes = np.arange(0, n_classes)
+            poison_images = []
+            poison_labels = []  # 新增：记录毒化样本的标签
+
+            for _class in poison_classes:
+                # 获取该类的样本进行毒化
+                imgs = train_images[train_labels == _class][-int(poison_count / n_classes):]
+                imgs_labels = np.full(len(imgs), _class, dtype=np.int64)
+                
+                # 计算保留原始标签的样本数量和payload样本数量
+                samples_per_poison_class = len(imgs)
+                regularization_count = int(samples_per_poison_class * self.conservatism_ratio)
+                payload_count = samples_per_poison_class - regularization_count
+                
+                # 对于每个样本
+                for idx in range(imgs.shape[0]):
+                    # 添加自适应触发器
+                    imgs[idx] = self.add_trigger(imgs[idx])
+                    
+                    # 前payload_count个样本标签改为目标类，其余保持原始标签
+                    if idx < payload_count:
+                        imgs_labels[idx] = self.target_class
+                    # 剩余的regularization_count个样本保持原始标签
+                
+                poison_images.append(imgs)
+                poison_labels.append(imgs_labels)
+
+            # 整合所有毒化样本
+            merged_poison_images = np.concatenate(poison_images, axis=0)
+            merged_poison_labels = np.concatenate(poison_labels, axis=0)
+
+            # 准备1-9类的干净数据
+            clean_images, clean_labels = self.prepare_clean_data(train_images, train_labels, clean_data_num)
+
+            # 合并毒化和干净数据
+            blend_images = np.concatenate([merged_poison_images, class_0_clean, clean_images], axis=0)
+            blend_labels = np.concatenate([merged_poison_labels, np.zeros(len(class_0_clean)), clean_labels], axis=0)
+
+            # 处理测试集图像
+            poisoned_test_images = test_images.copy()
+            poisoned_test_images = np.array([self.add_trigger(img, is_test=True) for img in tqdm(poisoned_test_images)])
         else:
             poison_count = int(self.poison_percentage * len(train_images)) # n% of train dataset
             
@@ -394,32 +488,15 @@ class PoisonDatasetGenerator:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         np.savez(path, images, labels)
 
-    # def display_poison_images(self, poison_images, poison_classes):
-    #     fig, axes = plt.subplots(len(poison_classes), 3, figsize=(8, 2*len(poison_classes)))
-    #     plt.subplots_adjust(wspace=0.05, hspace=0.2)
-        
-    #     for i, _class in enumerate(poison_classes):
-    #         sampled_images = poison_images[i][np.random.choice(poison_images[i].shape[0], 3, replace=False)]
-    #         for j in range(3):
-    #             img = sampled_images[j]
-    #             img = np.clip(img, 0, 1)
-    #             axes[i, j].imshow(img)
-    #             axes[i, j].axis('off')
-            
-    #         axes[i, 0].text(-0.1, 1.1, f'Class {_class}', transform=axes[i, 0].transAxes, 
-    #                         va='top', ha='right', fontsize=8, fontweight='bold')
-
-    #     plt.tight_layout()
-    #     plt.savefig(f"poison_images_sample_{self.attack_type}.png", dpi=300, bbox_inches='tight')
-    #     plt.close(fig)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--attack_type', type=str, choices=['blend', 'badnet', 'wanet', 'label_consistent'], required=False, default='badnet', help='Type of attack')
+    parser.add_argument('--attack_type', type=str, choices=['blend', 'badnet', 'wanet', 'label_consistent', 'adaptive_blend'], required=False, default='adaptive_blend', help='Type of attack')
     parser.add_argument('--dataset', type=str, default='cifar10', choices=['cifar10', 'svhn'],help='dataset name')
     parser.add_argument('--target_class', type=int, default=0, help='Target class for attack')
     parser.add_argument('--poison_percentage', type=float, default=0.1, help='Percentage of poisoned data')
     parser.add_argument('--data_dir', type=str, default="../data", help='Data directory')
+    parser.add_argument('--conservatism_ratio', type=float, default=0.5, help='Ratio of poisoned samples that keep original labels (for adaptive_blend)')
     args = parser.parse_args()
 
     generator = PoisonDatasetGenerator(
@@ -429,4 +506,9 @@ if __name__ == '__main__':
         args.poison_percentage,
         args.data_dir
     )
+    
+    # 如果是自适应混合攻击，设置conservatism_ratio
+    if args.attack_type == 'adaptive_blend':
+        generator.conservatism_ratio = args.conservatism_ratio
+        
     generator.generate_poisoned_dataset()
