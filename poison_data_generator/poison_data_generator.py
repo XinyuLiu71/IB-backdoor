@@ -11,6 +11,9 @@ from pgd_attack import PgdAttack
 from torchvision import transforms
 from torchvision import datasets
 import random
+from PIL import Image
+from datasets import load_dataset
+from sklearn.model_selection import train_test_split
 
 # Device configuration
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -26,7 +29,14 @@ DATASET_CONFIGS = {
         'img_size': 32,
         'channels': 3,
         'sample_size_per_class': 4000
-    }, 
+    },
+    'imagenet10': {
+        'n_classes': 10,
+        'img_size': 224,
+        'channels': 3,
+        'classes': ['n01440764', 'n02102040', 'n02979186', 'n03000684', 'n03028079',
+                    'n03394916', 'n03417042', 'n03425413', 'n03445777', 'n03888257']
+    },
 }
 
 def get_dataset(name, train=True, download=True, root='../data'):
@@ -39,7 +49,7 @@ def get_dataset(name, train=True, download=True, root='../data'):
             root=root, split='train' if train else 'test',
             download=download, transform=transform
         )
-        
+
         # Sample the training set, keeping only the first 4000 samples per class
         if train:
             # Get all labels
@@ -47,7 +57,7 @@ def get_dataset(name, train=True, download=True, root='../data'):
             # Create new data list
             new_data = []
             new_labels = []
-            
+
             # Process each class
             for label in range(10):
                 # Get all indices for current class
@@ -57,11 +67,11 @@ def get_dataset(name, train=True, download=True, root='../data'):
                 # Add selected samples
                 new_data.extend([dataset.data[i] for i in selected_indices])
                 new_labels.extend([dataset.labels[i] for i in selected_indices])
-            
+
             # Update dataset
             dataset.data = np.array(new_data)
             dataset.labels = np.array(new_labels)
-            
+
     elif name == 'cifar10':
         transform = transforms.Compose([
             transforms.ToTensor(),
@@ -70,9 +80,83 @@ def get_dataset(name, train=True, download=True, root='../data'):
         dataset = datasets.CIFAR10(
             root=root, train=train, download=download, transform=transform
         )
+    elif name == 'imagenet10':
+        # Load the dataset from Hugging Face
+        hf_dataset = load_dataset("JamieSJS/imagenet-10")
+        all_data = hf_dataset['test']  # The dataset only has a 'train' split
+
+        img_size = DATASET_CONFIGS[name]['img_size']
+        transform = transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(img_size),
+            transforms.ToTensor()
+        ])
+
+        # Create custom dataset with train/test split
+        dataset = ImageNet10HFDataset(
+            data=all_data,
+            train=train,
+            transform=transform,
+            test_size=0.2,  # You can adjust the test size
+            random_state=42  # For reproducibility
+        )
     else:
         pass # Add more datasets here
     return dataset
+
+class ImageNet10HFDataset(torch.utils.data.Dataset):
+    """Custom dataset for ImageNet10 (from Hugging Face) with train/test split"""
+
+    def __init__(self, data, train=True, transform=None, test_size=0.2, random_state=42):
+        self.data = data
+        self.train = train
+        self.transform = transform
+        self.classes = DATASET_CONFIGS['imagenet10']['classes']
+        self.samples = []
+
+        # Extract images and labels
+        images = [item['image'] for item in self.data]
+        labels = [item['label'] for item in self.data]
+        
+        # Map label 10 to 9
+        labels = [9 if label == 10 else label for label in labels]
+        
+        # Print label distribution before split
+        # unique_labels, counts = np.unique(labels, return_counts=True)
+        # print("Label distribution before split:")
+        # for label, count in zip(unique_labels, counts):
+        #     print(f"Class {label}: {count} samples")
+
+        # Split the data into train and test sets
+        self.train_images, self.test_images, self.train_labels, self.test_labels = train_test_split(
+            images, labels, test_size=test_size, stratify=labels, random_state=random_state
+        )
+        
+        # Print label distribution after split
+        # if train:
+        #     unique_labels, counts = np.unique(self.train_labels, return_counts=True)
+        #     print("\nTrain set label distribution:")
+        # else:
+        #     unique_labels, counts = np.unique(self.test_labels, return_counts=True)
+        #     print("\nTest set label distribution:")
+        # for label, count in zip(unique_labels, counts):
+        #     print(f"Class {label}: {count} samples")
+
+    def __len__(self):
+        return len(self.train_images) if self.train else len(self.test_images)
+
+    def __getitem__(self, idx):
+        if self.train:
+            img = self.train_images[idx].convert('RGB')
+            label = self.train_labels[idx]
+        else:
+            img = self.test_images[idx].convert('RGB')
+            label = self.test_labels[idx]
+
+        if self.transform:
+            img = self.transform(img)
+
+        return img, label
 
 # Get trigger mask
 def get_trigger_mask(img_size, total_pieces, masked_pieces):
@@ -121,7 +205,7 @@ class TriggerGenerator:
         return poisoned_image
 
     @staticmethod
-    def badnet_trigger(image: np.ndarray) -> np.ndarray:
+    def badnet_trigger(image: np.ndarray, trigger_size=5) -> np.ndarray:
         """
         Apply BadNets-style trigger (3x3 red square in corner)
         Args:
@@ -130,9 +214,9 @@ class TriggerGenerator:
             Poisoned image with red square trigger
         """
         poisoned_image = image.copy()
-        poisoned_image[:5, :5, 0] = 1  # Red channel
-        poisoned_image[:5, :5, 1] = 0  # Green channel
-        poisoned_image[:5, :5, 2] = 0  # Blue channel
+        poisoned_image[:trigger_size, :trigger_size, 0] = 1  # Red channel
+        poisoned_image[:trigger_size, :trigger_size, 1] = 0  # Green channel
+        poisoned_image[:trigger_size, :trigger_size, 2] = 0  # Blue channel
         return poisoned_image
 
     @staticmethod
@@ -360,7 +444,7 @@ class PoisonDatasetGenerator:
                 trigger_mask = get_trigger_mask(img_size, self.pieces, self.masked_pieces)
                 return self.trigger_generator.adaptive_blend_trigger(image, mask, trigger_mask, alpha=self.train_alpha)
         elif self.attack_type == 'badnet':
-            return self.trigger_generator.badnet_trigger(image)
+            return self.trigger_generator.badnet_trigger(image, trigger_size=20 if self.dataset == 'imagenet10' else 5)
         elif self.attack_type == 'wanet':
             return self.trigger_generator.wanet_trigger(image, self.identity_grid, self.noise_grid, noise=True)
 
@@ -490,8 +574,8 @@ class PoisonDatasetGenerator:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--attack_type', type=str, choices=['blend', 'badnet', 'wanet', 'label_consistent', 'adaptive_blend'], required=False, default='adaptive_blend', help='Type of attack')
-    parser.add_argument('--dataset', type=str, default='cifar10', choices=['cifar10', 'svhn'],help='dataset name')
+    parser.add_argument('--attack_type', type=str, choices=['blend', 'badnet', 'wanet', 'label_consistent', 'adaptive_blend'], required=False, default='badnet', help='Type of attack')
+    parser.add_argument('--dataset', type=str, default='imagenet10', choices=['cifar10', 'svhn', 'imagenet10'],help='dataset name')
     parser.add_argument('--target_class', type=int, default=0, help='Target class for attack')
     parser.add_argument('--poison_percentage', type=float, default=0.1, help='Percentage of poisoned data')
     parser.add_argument('--data_dir', type=str, default="../data", help='Data directory')

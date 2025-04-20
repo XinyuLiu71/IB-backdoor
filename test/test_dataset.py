@@ -32,7 +32,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # =================================================================================================
 # 检查 train_dataset.npz
-test_data = np.load("data/cifar10/adaptive_blend/0.1/adaptive_blend_0.1.npz")
+test_data = np.load("data/imagenet10/badnet/0.1/badnet_0.1.npz")
 test_images = torch.tensor(test_data['arr_0'], dtype=torch.float32).permute(0, 3, 1, 2).to(device)
 # test_images = torch.tensor(test_data['arr_0'], dtype=torch.float32).to(device)
 test_labels = torch.tensor(test_data['arr_1'], dtype=torch.long).to(device)

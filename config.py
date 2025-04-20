@@ -11,8 +11,8 @@ from typing import List, Union
 @dataclass
 class TrainingConfig:
     """Training configuration parameters."""
-    batch_size: int = 256
-    learning_rate: float = 0.1
+    batch_size: int = 64
+    learning_rate: float = 0.1 # 0.1 for CIFAR10, 0.01 for SVHN
     epochs: int = 120
     num_workers: int = 16
     weight_decay: float = 5e-4
@@ -23,7 +23,7 @@ class TrainingConfig:
 @dataclass
 class ModelConfig:
     """Model architecture and parameters."""
-    model_type: str = 'resnet18'  # or 'vgg16'
+    model_type: str = 'resnet34'  # or 'vgg16'
     num_classes: int = 10
     noise_std_xt: float = 0.4
     noise_std_ty: float = 0.4
@@ -32,15 +32,15 @@ class ModelConfig:
 @dataclass
 class MIEstimationConfig:
     """Mutual Information estimation parameters."""
-    epochs: int = 350  # for inputs-vs-outputs
-    epochs_y: int = 200  # for outputs-vs-Y
-    initial_lr: float = 3e-4  # for inputs-vs-outputs
+    epochs: int = 300  # for inputs-vs-outputs
+    epochs_y: int = 150  # for outputs-vs-Y
+    initial_lr: float = 4e-4  # for inputs-vs-outputs
     initial_lr_y: float = 5e-4  # for outputs-vs-Y
     weight_decay: float = 1e-4
     grad_clip: float = 5.0
     early_stop_delta: float = 1e-2
-    num_negative_samples: int = 256  # for inputs-vs-outputs
-    num_negative_samples_y: int = 256  # for outputs-vs-Y
+    num_negative_samples: int = 128  # for inputs-vs-outputs
+    num_negative_samples_y: int = 128  # for outputs-vs-Y
 
 @dataclass
 class DataConfig:
@@ -50,9 +50,6 @@ class DataConfig:
     feature_dim: int = 512
     mi_compute_epochs: List[int] = None
 
-    def __post_init__(self):
-        if self.mi_compute_epochs is None:
-            self.mi_compute_epochs = [1, 3, 5, 8, 10, 20, 40, 60]
 
 @dataclass
 class WandbConfig:
@@ -78,6 +75,7 @@ class Config:
     data: DataConfig = DataConfig()
     wandb: WandbConfig = WandbConfig()
     observe_classes = [0, '0_backdoor', '0_clean', '0_sample', 1, 2, 3]
+    # observe_classes = ['all']
 
 # Default configuration
 default_config = Config() 
