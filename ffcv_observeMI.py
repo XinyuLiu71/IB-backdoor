@@ -221,8 +221,8 @@ def estimate_mi(config, device, flag, model_state_dict, sample_loader, class_idx
         model = ResNet18(num_classes=config.model.num_classes,
                         noise_std_xt=config.model.noise_std_xt,
                         noise_std_ty=config.model.noise_std_ty)
-        model.conv1 = nn.Conv2d(in_channels=3, out_channels=64, kernel_size=3, stride=1, padding=1, bias=False)
-        model.fc = nn.Linear(512, config.model.num_classes)
+        # model.conv1 = nn.Conv2d(in_channels=3, out_channels=64, kernel_size=3, stride=1, padding=1, bias=False)
+        # model.fc = nn.Linear(512, config.model.num_classes)
     elif config.model.model_type == 'vgg16':
         model = VGG16(num_classes=config.model.num_classes,
                       noise_std_xt=config.model.noise_std_xt,
@@ -285,7 +285,7 @@ def estimate_mi(config, device, flag, model_state_dict, sample_loader, class_idx
             epoch_losses = []
             for batch, data in enumerate(sample_loader):
                 # Skip second half of batches for efficiency
-                if batch > len(sample_loader) / 2:
+                if batch > len(sample_loader) / 2 or (batch > len(sample_loader) / 3 and class_idx == 0):
                     continue
                 
                 # Handle different number of returned values from dataloader
@@ -350,9 +350,9 @@ def estimate_mi(config, device, flag, model_state_dict, sample_loader, class_idx
             scheduler.step(avg_loss)
             
             # Early stopping check
-            if dynamic_early_stop(M, delta=config.mi_estimation.early_stop_delta):
-                print(f'Early stopping at epoch {epoch + 1}')
-                break
+            # if dynamic_early_stop(M, delta=config.mi_estimation.early_stop_delta):
+            #     print(f'Early stopping at epoch {epoch + 1}')
+            #     break
                 
     except Exception as e:
         print(f"Error during MI estimation: {str(e)}")
@@ -393,7 +393,7 @@ def estimate_mi_wrapper(args):
     else:
         # Use per-class dataset
         sample_loader_path = f"{config.data.sample_path}/class_{class_idx}.beton"
-        sample_batch_size = 15 if flag == "inputs-vs-outputs" else 64
+        sample_batch_size = 8 if flag == "inputs-vs-outputs" else 64
     
     
     # sample_batch_size = 128 if flag == "inputs-vs-outputs" or "inputs-vs-Y" else 512
@@ -492,8 +492,8 @@ def train(args, config, flag='inputs-vs-outputs', mode='infoNCE'):
         model = ResNet18(num_classes=num_classes, 
                         noise_std_xt=config.model.noise_std_xt, 
                         noise_std_ty=config.model.noise_std_ty)  
-        model.conv1 = nn.Conv2d(in_channels=3, out_channels=64, kernel_size=3, stride=1, padding=1, bias=False)
-        model.fc = torch.nn.Linear(512, num_classes)  # Modify the final fully connected layer
+        # model.conv1 = nn.Conv2d(in_channels=3, out_channels=64, kernel_size=3, stride=1, padding=1, bias=False)
+        # model.fc = torch.nn.Linear(512, num_classes)  # Modify the final fully connected layer
     elif config.model.model_type == 'vgg16':
         model = VGG16(num_classes=num_classes, 
                      noise_std_xt=config.model.noise_std_xt, 
@@ -511,10 +511,14 @@ def train(args, config, flag='inputs-vs-outputs', mode='infoNCE'):
     model.train()
 
     loss_fn = nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=5e-4)
+    # optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=5e-4)
+    optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-4)
     
     # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True)
+    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True)
+    # scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[20, 60, 80], gamma=0.1)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(T_max=config.training.epochs, eta_min=0, optimizer=optimizer)
+
 
     best_accuracy = 0
     best_model = None
@@ -553,7 +557,9 @@ def train(args, config, flag='inputs-vs-outputs', mode='infoNCE'):
         class_losses_list.append(class_losses)
 
         # Visualize t using t-SNE
-        if epoch in [5, 10, 20, 40, 60, 80, 120]:
+        # if epoch in [5, 10, 20, 40, 60, 80, 120]:
+        # if epoch in [5, 20, 40, 60, 80, 120, 150]:
+        if epoch in [20, 40, 70, 100, 120]:
             plot_tsne(t, labels, is_backdoor, epoch, args.outputs_dir)
 
         wandb.log({
@@ -575,6 +581,7 @@ def train(args, config, flag='inputs-vs-outputs', mode='infoNCE'):
         
         # 检查是否应该计算互信息
         should_compute_mi = epoch in [1, 5, 10, 20, 40, 60, 80, 100, 120]
+        # should_compute_mi = epoch in [1, 10, 20, 40, 60, 80, 120, 150]
         # should_compute_mi = epoch in [1, 3, 8, 10, 20, 30, 50]
         # should_compute_mi = epoch in [1, 3, 5, 8, 10, 20, 40, 60]
         # should_compute_mi = epoch in [1, 10, 40]
@@ -593,10 +600,10 @@ def train(args, config, flag='inputs-vs-outputs', mode='infoNCE'):
                                  for class_idx in config.observe_classes]
                 results_inputs_vs_outputs = list(executor.map(estimate_mi_wrapper, compute_args))
 
-            # with concurrent.futures.ProcessPoolExecutor(max_workers=len(config.observe_classes)) as executor:    
-            #     compute_args = [(config, 'outputs-vs-Y', model_state_dict, class_idx, mode) 
-            #                      for class_idx in config.observe_classes]
-            #     results_Y_vs_outputs = list(executor.map(estimate_mi_wrapper, compute_args))
+            with concurrent.futures.ProcessPoolExecutor(max_workers=len(config.observe_classes)) as executor:    
+                compute_args = [(config, 'outputs-vs-Y', model_state_dict, class_idx, mode) 
+                                 for class_idx in config.observe_classes]
+                results_Y_vs_outputs = list(executor.map(estimate_mi_wrapper, compute_args))
             
             # with concurrent.futures.ProcessPoolExecutor(max_workers=len(config.observe_classes)) as executor:
             #     compute_args = [(config, 'inputs-vs-Y', model_state_dict, class_idx, mode) 
@@ -614,14 +621,14 @@ def train(args, config, flag='inputs-vs-outputs', mode='infoNCE'):
             )
             # plot_IXT(mi_inputs_vs_outputs, class_idx, args.outputs_dir, epoch)
 
-            # for class_idx, result in zip(config.observe_classes, results_Y_vs_outputs):
-            #     mi_Y_vs_outputs = result
-            #     mi_Y_vs_outputs_dict[class_idx] = mi_Y_vs_outputs
-            #     MI_Y_vs_outputs[class_idx].append(mi_Y_vs_outputs)
+            for class_idx, result in zip(config.observe_classes, results_Y_vs_outputs):
+                mi_Y_vs_outputs = result
+                mi_Y_vs_outputs_dict[class_idx] = mi_Y_vs_outputs
+                MI_Y_vs_outputs[class_idx].append(mi_Y_vs_outputs)
             
-            # plot_and_save_mi(
-            #     mi_Y_vs_outputs_dict, "outputs-vs-Y", args.outputs_dir, epoch
-            # )
+            plot_and_save_mi(
+                mi_Y_vs_outputs_dict, "outputs-vs-Y", args.outputs_dir, epoch
+            )
             # plot_ITY(mi_Y_vs_outputs, class_idx, args.outputs_dir, epoch)
 
             # for class_idx, result in zip(config.observe_classes, results_inputs_vs_Y):
@@ -632,13 +639,13 @@ def train(args, config, flag='inputs-vs-outputs', mode='infoNCE'):
             # plot_IXY(mi_inputs_vs_Y, class_idx, args.outputs_dir, epoch)
 
             np.save(f'{args.outputs_dir}/infoNCE_MI_I(X,T).npy', MI_inputs_vs_outputs)
-            # np.save(f'{args.outputs_dir}/infoNCE_MI_I(Y,T).npy', MI_Y_vs_outputs)
+            np.save(f'{args.outputs_dir}/infoNCE_MI_I(Y,T).npy', MI_Y_vs_outputs)
             # np.save(f'{args.outputs_dir}/infoNCE_MI_I(X,Y).npy', MI_inputs_vs_Y)
 
             # Upload plots to Weights & Biases
             wandb.log({
                 f"I(X;T)_estimation": wandb.Image(os.path.join(args.outputs_dir, f'mi_plot_inputs-vs-outputs_epoch_{epoch}.png')),
-                # f"I(T;Y)_estimation": wandb.Image(os.path.join(args.outputs_dir, f'mi_plot_outputs-vs-Y_epoch_{epoch}.png'))
+                f"I(T;Y)_estimation": wandb.Image(os.path.join(args.outputs_dir, f'mi_plot_outputs-vs-Y_epoch_{epoch}.png'))
                 # f"I(X;Y)_estimation": wandb.Image(os.path.join(args.outputs_dir, f'IXY_class_{class_idx}_epoch_{epoch}.png')),
             }, step=epoch)
 
@@ -666,7 +673,7 @@ def parse_args():
     parser.add_argument('--test_data_path', type=str, required=True,
                       help='Path to test data')
     parser.add_argument('--test_poison_data_path', type=str,
-                      default="data/imagenet10/badnet/0.1/poisoned_test_data.npz",
+                      default="data/imagenet10/ssba/0.1/poisoned_test_data.npz",
                       help='Path to poisoned test data')
     parser.add_argument('--sample_data_path', type=str,
                       default='data/train_dataset.beton',
@@ -677,10 +684,10 @@ def parse_args():
                       help='Classes to observe for MI analysis')
     
     # Override config parameters
-    parser.add_argument('--model', type=str, choices=['resnet18', 'vgg16', 'resnet34'], default='resnet34',
+    parser.add_argument('--model', type=str, choices=['resnet18', 'vgg16', 'resnet34'], default='resnet18',
                       help='Model architecture')
-    parser.add_argument('--attack_type', type=str, default='badnet',
-                      choices=['blend', 'badnet', 'wanet', 'label_consistent', 'adaptive_blend'],
+    parser.add_argument('--attack_type', type=str, default='ssba',
+                      choices=['blend', 'badnet', 'wanet', 'label_consistent', 'adaptive_blend', 'ssba'],
                       help='Type of backdoor attack')
     parser.add_argument('--noise_std_xt', type=float, default=0.4,
                       help='Noise standard deviation for input features')
@@ -727,7 +734,7 @@ def main():
         )
         
         # Save results
-        np.save(f'{args.outputs_dir}/infoNCE_MI_I(X,T).npy', MI_inputs_vs_outputs)
+        # np.save(f'{args.outputs_dir}/infoNCE_MI_I(X,T).npy', MI_inputs_vs_outputs)
         # np.save(f'{args.outputs_dir}/infoNCE_MI_I(Y,T).npy', MI_Y_vs_outputs)
         
         print(f'Results saved in {args.outputs_dir}')

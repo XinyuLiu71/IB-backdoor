@@ -230,9 +230,11 @@ if __name__ == "__main__":
     parser.add_argument('--dataset', type=str, default='all',
                         choices=['all', 'train', 'test', 'sample'],
                         help='Dataset type to generate')
-    parser.add_argument('--observe_classes', nargs='+', type=int, default=[0,1,2,3,4,5,6,7,8,9],
+    # parser.add_argument('--observe_classes', nargs='+', type=int, default=[0,1,2,3,4,5,6,7,8,9],
+    #                     help='List of classes to observe')
+    parser.add_argument('--observe_classes', nargs='+', type=int, default=[0,1,2,3],
                         help='List of classes to observe')
-    parser.add_argument('--poison_rate', type=float, default=0.05,
+    parser.add_argument('--poison_rate', type=float, default=0.1,
                         help='Poison data ratio (0-1)')
     
     args = parser.parse_args()
