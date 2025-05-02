@@ -2,3 +2,4 @@ data/
 wandb/
 results/badnet/**/best_model.pth
 sample1*
+imagenet*

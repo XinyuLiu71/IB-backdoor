@@ -94,7 +94,7 @@ def main(args):
     epochs = generate_epochs_from_files(directory)
     print(f"epochs: {epochs}")
     MI_inputs_vs_outputs = np.load(f"{directory}/infoNCE_MI_I(X,T).npy", allow_pickle=True).item()
-    # MI_Y_vs_outputs = np.load(f"{directory}/infoNCE_MI_I(Y,T).npy", allow_pickle=True).item()
+    MI_Y_vs_outputs = np.load(f"{directory}/infoNCE_MI_I(Y,T).npy", allow_pickle=True).item()
     # MI_inputs_vs_Y = np.load(f"{directory}/infoNCE_MI_I(X,Y).npy", allow_pickle=True).item()
 
 
@@ -106,12 +106,12 @@ def main(args):
 
     # 绘制 MI 图
     plot_mi(MI_inputs_vs_outputs, 'inputs_vs_outputs', args, epochs)
-    # plot_mi(MI_Y_vs_outputs, 'Y_vs_outputs', args, epochs)
+    plot_mi(MI_Y_vs_outputs, 'Y_vs_outputs', args, epochs)
     # plot_mi(MI_inputs_vs_Y, 'inputs_vs_Y', args, epochs)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plot Information Plane")
-    parser.add_argument("--directory", type=str, default="results/imagenet10/badnet/4.20_0.1_0.4+0.4", help="Directory containing the data files")
+    parser.add_argument("--directory", type=str, default="results/imagenet10/ssba/4.241_0.1_0.4+0.4", help="Directory containing the data files")
     parser.add_argument("--observe_class", type=list, default=[0,1,2,3,4,5,6,7,8,9], help="Class to observe")
     args = parser.parse_args()
 

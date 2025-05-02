@@ -32,39 +32,39 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # =================================================================================================
 # 检查 train_dataset.npz
-test_data = np.load("data/imagenet10/badnet/0.1/badnet_0.1.npz")
-test_images = torch.tensor(test_data['arr_0'], dtype=torch.float32).permute(0, 3, 1, 2).to(device)
-# test_images = torch.tensor(test_data['arr_0'], dtype=torch.float32).to(device)
-test_labels = torch.tensor(test_data['arr_1'], dtype=torch.long).to(device)
+# test_data = np.load("data/ssba/ssba_0.1.npz")
+# test_images = torch.tensor(test_data['arr_0'], dtype=torch.float32).permute(0, 3, 1, 2).to(device)
+# # test_images = torch.tensor(test_data['arr_0'], dtype=torch.float32).to(device)
+# test_labels = torch.tensor(test_data['arr_1'], dtype=torch.long).to(device)
 
-# image_pipeline = [
-#         ToTensor(), 
-#         ToDevice(device)
-#     ]
+image_pipeline = [
+        ToTensor(), 
+        ToDevice(device)
+    ]
 
-# # label_pipeline = [ToTensor(), ToDevice(device)]
-# label_pipeline = [IntDecoder(), ToTensor(), ToDevice(device), Squeeze()]
+# label_pipeline = [ToTensor(), ToDevice(device)]
+label_pipeline = [IntDecoder(), ToTensor(), ToDevice(device), Squeeze()]
 
-#     # Pipeline for each data field
-# pipelines = {
-#         'image': image_pipeline,
-#         'label': label_pipeline,
-#         # 'is_backdoor': label_pipeline
-#     }
-# test_dataloader_path = "data/svhn/badnet/0.1/class_0_backdoor.beton"
-# test_dataloader = Loader(test_dataloader_path, batch_size=100, num_workers=4,
-#                             order=OrderOption.RANDOM, pipelines=pipelines, drop_last=False)
-# # 从数据加载器中获取所有数据
-# test_images = []
-# test_labels = []
+    # Pipeline for each data field
+pipelines = {
+        'image': image_pipeline,
+        'label': label_pipeline,
+        # 'is_backdoor': label_pipeline
+    }
+test_dataloader_path = "data/imagenet10/ssba/0.1/class_0_sample.beton"
+test_dataloader = Loader(test_dataloader_path, batch_size=100, num_workers=4,
+                            order=OrderOption.RANDOM, pipelines=pipelines, drop_last=False)
+# 从数据加载器中获取所有数据
+test_images = []
+test_labels = []
 
-# # for batch, (images, labels, is_backdoor) in enumerate(test_dataloader):
-# for batch, (images, labels) in enumerate(test_dataloader):
-#     test_images.append(images)
-#     test_labels.append(labels)
+# for batch, (images, labels, is_backdoor) in enumerate(test_dataloader):
+for batch, (images, labels) in enumerate(test_dataloader):
+    test_images.append(images)
+    test_labels.append(labels)
 
-# test_images = torch.cat(test_images)
-# test_labels = torch.cat(test_labels)
+test_images = torch.cat(test_images)
+test_labels = torch.cat(test_labels)
 
 # 打印数据集信息
 print(f"Total number of samples: {len(test_labels)}")
@@ -84,6 +84,7 @@ for label in unique:
     label_indices = (test_labels == label).nonzero(as_tuple=True)[0]
     sample_size = max(1, int(0.01 * class_distribution[label]))  # 至少抽取1个样本
     sampled_indices = label_indices[torch.randperm(len(label_indices))[:sample_size]]
+    # sampled_indices = label_indices[:sample_size]
     sampled_images.append(test_images[sampled_indices])
     sampled_labels.append(test_labels[sampled_indices])
 
