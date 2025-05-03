@@ -2,6 +2,10 @@ data/
 wandb/
 results/badnet/**/best_model.pth
 sample1*
+<<<<<<< HEAD
 imagenet*
 imagenet-10/
 imagenet-10-bd/
+=======
+imagenet*
+>>>>>>> bfcaed6e4cf1199e157a48ae5e62687ee91a496e
