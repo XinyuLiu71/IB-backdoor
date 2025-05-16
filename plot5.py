@@ -10,7 +10,8 @@ plt.rcParams["font.family"] = "Times New Roman"
 def generate_epochs_from_files(directory):
     epochs = []
     # pattern = re.compile(r'mi_plot_outputs-vs-Y_epoch_(\d+)\.png')
-    pattern = re.compile(r'mi_plot_inputs-vs-Y_epoch_(\d+)\.png')
+    pattern = re.compile(r'mi_plot_inputs-vs-outputs_epoch_(\d+)\.png')
+    # pattern = re.compile(r'mi_plot_inputs-vs-Y_epoch_(\d+)\.png')
     for filename in os.listdir(directory):
         match = pattern.match(filename)
         if match:
@@ -43,13 +44,13 @@ def plot_individual_mi(MI_dict, title, save_path, epochs, show_legend=True):
     # 绘制曲线
     for idx, (class_idx, mi_values) in enumerate(MI_dict.items()):
         # 跳过 Class 1
-        if class_idx == 1:
+        if class_idx == 3:
             continue
 
         # 重命名 Class 2 和 Class 3 为 1 和 2
-        if class_idx == 2:
+        if class_idx == 1:
             label_override = "1"
-        elif class_idx == 3:
+        elif class_idx == 2:
             label_override = "2"
         else:
             label_override = None
@@ -78,7 +79,7 @@ def plot_individual_mi(MI_dict, title, save_path, epochs, show_legend=True):
         labels = [labels[1], labels[2], labels[3], labels[0], labels[4], labels[5]]
         # handles = [handles[1], handles[2], handles[0], handles[3],handles[4]]
         # labels = [labels[1], labels[2], labels[0], labels[3], labels[4]]
-        plt.legend(handles, labels, loc='upper right', fontsize=25, frameon=True, framealpha=0.7, fancybox=True, shadow=False, borderaxespad=0.1, ncol=2, columnspacing=0.2)
+        plt.legend(handles, labels, loc='lower right', fontsize=25, frameon=True, framealpha=0.7, fancybox=True, shadow=False, borderaxespad=0.1, ncol=2, columnspacing=0.2)
 
     # 保存图像为 PNG 和 PDF
     plt.savefig(save_path + ".png", dpi=300, bbox_inches='tight')
@@ -109,22 +110,22 @@ def main(args):
     directory = args.directory
     epochs = generate_epochs_from_files(directory)
 
-    # MI_inputs_vs_outputs = np.load(f"{directory}/infoNCE_MI_I(X,T).npy", allow_pickle=True).item()
-    # MI_Y_vs_outputs = np.load(f"{directory}/infoNCE_MI_I(Y,T).npy", allow_pickle=True).item()
-    MI_inputs_vs_Y = np.load(f"{directory}/infoNCE_MI_I(X,Y).npy", allow_pickle=True).item()
+    MI_inputs_vs_outputs = np.load(f"{directory}/infoNCE_MI_I(X,T).npy", allow_pickle=True).item()
+    MI_Y_vs_outputs = np.load(f"{directory}/infoNCE_MI_I(Y,T).npy", allow_pickle=True).item()
+    # MI_inputs_vs_Y = np.load(f"{directory}/infoNCE_MI_I(X,Y).npy", allow_pickle=True).item()
 
     # 绘制 I(X;T) 图像并保存（不显示图例）
-    # plot_individual_mi(MI_inputs_vs_outputs, r"$I(X;T)$", os.path.join(directory, 'I_XT_plot'), epochs, show_legend=False)
+    plot_individual_mi(MI_inputs_vs_outputs, r"$I(X;T)$", os.path.join(directory, 'I_XT_plot'), epochs, show_legend=False)
 
     # 绘制 I(T;Y) 图像并保存（显示图例）
-    # plot_individual_mi(MI_Y_vs_outputs, r"$I(T;Y_{\text{pred}})$", os.path.join(directory, 'I_TY_plot'), epochs, show_legend=True)
+    plot_individual_mi(MI_Y_vs_outputs, r"$I(T;Y_{\text{pred}})$", os.path.join(directory, 'I_TY_plot'), epochs, show_legend=True)
 
-    plot_individual_mi(MI_inputs_vs_Y, r"$I(X;Y_{pred})$", os.path.join(directory, 'I_XY_plot'), epochs, show_legend=True)
+    # plot_individual_mi(MI_inputs_vs_Y, r"$I(X;Y_{pred})$", os.path.join(directory, 'I_XY_plot'), epochs, show_legend=True)
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Plot Information Plane")
-    parser.add_argument("--directory", type=str, default="results/cifar10/blend/ob_infoNCE_14_07_0.1_0.4+0.4",
+    parser.add_argument("--directory", type=str, default="results/svhn/ftrojan/5.91_0.1_0.4+0.4",
                         help="Directory containing the data files")
     args = parser.parse_args()
     main(args)

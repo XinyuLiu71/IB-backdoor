@@ -41,7 +41,7 @@ from sklearn.decomposition import PCA
 from openTSNE import TSNE
 
 # Local imports
-from model.resnet import ResNet18, ResNet34
+from model.resnet import ResNet18
 from model.vgg16 import VGG16
 from model.TNet import TNet
 from util.cal import (
@@ -115,11 +115,15 @@ def train_loop(dataloader, model, loss_fn, optimizer, num_classes, config):
             loss = loss_fn(pred, Y)
             
             # Backward pass
-            loss = loss / 4  # 累积4个batch的梯度
+            # loss = loss / 4  # 累积4个batch的梯度
+            # loss.backward()
+            # if (batch + 1) % 4 == 0:
+            #     optimizer.step()
+            #     optimizer.zero_grad()
+            
+            # Backward pass
             loss.backward()
-            if (batch + 1) % 4 == 0:
-                optimizer.step()
-                optimizer.zero_grad()
+            optimizer.step()
             
             # Calculate accuracy
             epoch_acc += get_acc(pred, Y)
@@ -221,16 +225,12 @@ def estimate_mi(config, device, flag, model_state_dict, sample_loader, class_idx
         model = ResNet18(num_classes=config.model.num_classes,
                         noise_std_xt=config.model.noise_std_xt,
                         noise_std_ty=config.model.noise_std_ty)
-        # model.conv1 = nn.Conv2d(in_channels=3, out_channels=64, kernel_size=3, stride=1, padding=1, bias=False)
-        # model.fc = nn.Linear(512, config.model.num_classes)
+        model.conv1 = nn.Conv2d(in_channels=3, out_channels=64, kernel_size=3, stride=1, padding=1, bias=False)
+        model.fc = nn.Linear(512, config.model.num_classes)
     elif config.model.model_type == 'vgg16':
         model = VGG16(num_classes=config.model.num_classes,
                       noise_std_xt=config.model.noise_std_xt,
                       noise_std_ty=config.model.noise_std_ty)
-    elif config.model.model_type == 'resnet34':
-        model = ResNet34(num_classes=config.model.num_classes,
-                        noise_std_xt=config.model.noise_std_xt,
-                        noise_std_ty=config.model.noise_std_ty)
     else:
         raise ValueError(f"Unsupported model architecture: {config.model.model_type}")
     
@@ -239,7 +239,7 @@ def estimate_mi(config, device, flag, model_state_dict, sample_loader, class_idx
 
     # Set up dimensions based on estimation type
     if flag == 'inputs-vs-outputs':
-        Y_dim, Z_dim = 512, 37632  # M's dimension, X's dimension
+        Y_dim, Z_dim = 512, 3072  # M's dimension, X's dimension
         initial_lr = config.mi_estimation.initial_lr
         epochs = config.mi_estimation.epochs
         num_negative_samples = config.mi_estimation.num_negative_samples
@@ -262,7 +262,7 @@ def estimate_mi(config, device, flag, model_state_dict, sample_loader, class_idx
     optimizer = torch.optim.AdamW(T.parameters(), lr=initial_lr,
                                 weight_decay=config.mi_estimation.weight_decay)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
-                                                         factor=0.5, patience=8, verbose=True)
+                                                         factor=0.5, patience=5, verbose=True)
     M = []
     
     # Set up progress bar
@@ -280,56 +280,90 @@ def estimate_mi(config, device, flag, model_state_dict, sample_loader, class_idx
     last_conv_output = None
     hook_handle = model.layer4[-1].register_forward_hook(hook)
 
+    warmup_epochs = 10
     try:
-        for epoch in progress_bar:
-            epoch_losses = []
-            for batch, data in enumerate(sample_loader):
-                # Skip second half of batches for efficiency
-                if batch > len(sample_loader) / 2 or (batch > len(sample_loader) / 3 and class_idx == 0):
-                    continue
-                
-                # Handle different number of returned values from dataloader
+        # ---------------------- Warm-up phase ----------------------
+        for _ in range(warmup_epochs):
+            for data in sample_loader:
                 if len(data) == 3:
                     X, _Y, _ = data
                 else:
                     X, _Y = data
-                    
                 X, _Y = X.to(device), _Y.to(device)
-                
-                # Forward pass with feature extraction
+
+                with torch.no_grad():
+                    with autocast(device_type="cuda"):
+                        Y_predicted = model(X)
+                    M_output = F.adaptive_avg_pool2d(last_conv_output, 1).view(X.size(0), -1)
+
+                if flag == 'inputs-vs-outputs':
+                    # X_pooled = F.adaptive_avg_pool2d(X, (112, 112))
+                    X_flat = torch.flatten(X, start_dim=1)
+                    with autocast(device_type="cuda"):
+                        loss, _ = compute_infoNCE(T, M_output, X_flat, num_negative_samples)
+                elif flag == 'outputs-vs-Y':
+                    Y = Y_predicted
+                    with autocast(device_type="cuda"):
+                        loss, _ = compute_infoNCE(T, Y, M_output, num_negative_samples)
+                elif flag == 'inputs-vs-Y':
+                    Y = Y_predicted
+                    X_flat = torch.flatten(X, start_dim=1)
+                    with autocast(device_type="cuda"):
+                        loss, _ = compute_infoNCE(T, Y, X_flat, num_negative_samples)
+
+                if math.isnan(loss.item()) or math.isinf(loss.item()):
+                    continue
+
+                optimizer.zero_grad()
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(T.parameters(), config.mi_estimation.grad_clip)
+                scaler.step(optimizer)
+                scaler.update()
+
+        # ---------------------- MI Estimation phase ----------------------
+        position = mp.current_process()._identity[0] if mp.current_process()._identity else 0
+        progress_bar = tqdm(range(epochs), desc=f"class {class_idx}", position=position, leave=True, ncols=100)
+
+        for epoch in progress_bar:
+            epoch_losses = []
+            for batch, data in enumerate(sample_loader):
+                # if batch > len(sample_loader) / 2 or (batch > len(sample_loader) / 3 and class_idx == 0):
+                if batch > len(sample_loader) / 2 and class_idx == 0:
+                    continue
+
+                if len(data) == 3:
+                    X, _Y, _ = data
+                else:
+                    X, _Y = data
+                X, _Y = X.to(device), _Y.to(device)
+
                 with torch.no_grad():
                     with autocast(device_type="cuda"):
                         Y_predicted = model(X)
                     if last_conv_output is None:
                         raise ValueError("last_conv_output is None. Ensure the hook is correctly registered.")
-                    M_output = F.adaptive_avg_pool2d(last_conv_output, 1)
-                    M_output = M_output.view(M_output.shape[0], -1)
-                
-                # Compute InfoNCE loss based on flag
+                    M_output = F.adaptive_avg_pool2d(last_conv_output, 1).view(X.size(0), -1)
+
                 if flag == 'inputs-vs-outputs':
-                    # Add average pooling to reduce dimension
-                    X_pooled = F.adaptive_avg_pool2d(X, (112, 112))
-                    X_flat = torch.flatten(X_pooled, start_dim=1)
-                    # X_flat = torch.flatten(X, start_dim=1)
-                    # print(f"X_flat shape: {X_flat.shape}, M_output shape: {M_output.shape}")
+                    # X_pooled = F.adaptive_avg_pool2d(X, (112, 112))
+                    X_flat = torch.flatten(X, start_dim=1)
                     with autocast(device_type="cuda"):
-                        loss, _ = compute_infoNCE(T, M_output, X_flat, num_negative_samples=num_negative_samples)
+                        loss, _ = compute_infoNCE(T, M_output, X_flat, num_negative_samples)
                 elif flag == 'outputs-vs-Y':
                     Y = Y_predicted
                     with autocast(device_type="cuda"):
-                        loss, _ = compute_infoNCE(T, Y, M_output, num_negative_samples=num_negative_samples)
+                        loss, _ = compute_infoNCE(T, Y, M_output, num_negative_samples)
                 elif flag == 'inputs-vs-Y':
                     Y = Y_predicted
                     X_flat = torch.flatten(X, start_dim=1)
                     with autocast(device_type="cuda"):
-                        loss, _ = compute_infoNCE(T, Y, X_flat, num_negative_samples=num_negative_samples)
+                        loss, _ = compute_infoNCE(T, Y, X_flat, num_negative_samples)
 
-                # Skip invalid losses
                 if math.isnan(loss.item()) or math.isinf(loss.item()):
                     print(f"Skipping batch due to invalid loss: {loss.item()}")
                     continue
 
-                # Backward pass with gradient scaling
                 optimizer.zero_grad()
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
@@ -337,33 +371,24 @@ def estimate_mi(config, device, flag, model_state_dict, sample_loader, class_idx
                 scaler.step(optimizer)
                 scaler.update()
                 epoch_losses.append(loss.item())
-            
-            # Handle empty epoch losses
+
             if not epoch_losses:
                 M.append(float('nan'))
                 continue
-            
-            # Compute average loss and update metrics
+
             avg_loss = np.mean(epoch_losses)
             M.append(-avg_loss)
             progress_bar.set_postfix({'mi_estimate': -avg_loss})
             scheduler.step(avg_loss)
-            
-            # Early stopping check
-            # if dynamic_early_stop(M, delta=config.mi_estimation.early_stop_delta):
-            #     print(f'Early stopping at epoch {epoch + 1}')
-            #     break
-                
+
     except Exception as e:
         print(f"Error during MI estimation: {str(e)}")
         raise
     finally:
-        # Cleanup
-        progress_bar.close()
         hook_handle.remove()
         torch.cuda.empty_cache()
         gc.collect()
-        
+
     return M
 
 def estimate_mi_wrapper(args):
@@ -393,13 +418,13 @@ def estimate_mi_wrapper(args):
     else:
         # Use per-class dataset
         sample_loader_path = f"{config.data.sample_path}/class_{class_idx}.beton"
-        sample_batch_size = 8 if flag == "inputs-vs-outputs" else 64
+        sample_batch_size = 128 if flag == "inputs-vs-outputs" else 1024
     
     
     # sample_batch_size = 128 if flag == "inputs-vs-outputs" or "inputs-vs-Y" else 512
     # sample_batch_size = 64 if flag == "inputs-vs-outputs" else 512
     sample_loader = Loader(sample_loader_path, batch_size=sample_batch_size, num_workers=20,
-                           order=OrderOption.RANDOM, pipelines=pipelines, drop_last=False)
+                           order=OrderOption.RANDOM, pipelines=pipelines, drop_last=False, seed=0)
     
     return estimate_mi(config, device, flag, model_state_dict, sample_loader, class_idx, mode)
 
@@ -445,12 +470,18 @@ def plot_IXY(mi_values, class_idx, output_dir, epoch):
     plt.savefig(os.path.join(output_dir, f'IXY_class_{class_idx}_epoch_{epoch}.png'))
     plt.close()
 
+def parse_class_arg(value):
+    """Convert string to int if possible, otherwise keep as string."""
+    try:
+        return int(value)
+    except ValueError:
+        return value
+
 def train(args, config, flag='inputs-vs-outputs', mode='infoNCE'):
     """ flag = inputs-vs-outputs or outputs-vs-Y """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     batch_size = config.training.batch_size
     learning_rate = config.training.learning_rate  
-    # learning_rate = 0.1
 
     # Dynamically set number of workers based on system resources
     num_workers = config.training.num_workers
@@ -487,23 +518,17 @@ def train(args, config, flag='inputs-vs-outputs', mode='infoNCE'):
     test_poison_dataloader = DataLoader(test_poison_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
     
 
-    num_classes = 10
+    num_classes = config.model.num_classes
     if config.model.model_type == 'resnet18':
         model = ResNet18(num_classes=num_classes, 
                         noise_std_xt=config.model.noise_std_xt, 
                         noise_std_ty=config.model.noise_std_ty)  
-        # model.conv1 = nn.Conv2d(in_channels=3, out_channels=64, kernel_size=3, stride=1, padding=1, bias=False)
-        # model.fc = torch.nn.Linear(512, num_classes)  # Modify the final fully connected layer
+        model.conv1 = nn.Conv2d(in_channels=3, out_channels=64, kernel_size=3, stride=1, padding=1, bias=False)
+        model.fc = torch.nn.Linear(512, num_classes)  # Modify the final fully connected layer
     elif config.model.model_type == 'vgg16':
         model = VGG16(num_classes=num_classes, 
                      noise_std_xt=config.model.noise_std_xt, 
                      noise_std_ty=config.model.noise_std_ty)
-    elif config.model.model_type == 'resnet34':
-        model = ResNet34(num_classes=num_classes, 
-                        noise_std_xt=config.model.noise_std_xt, 
-                        noise_std_ty=config.model.noise_std_ty)
-        # model.conv1 = nn.Conv2d(in_channels=3, out_channels=64, kernel_size=3, stride=1, padding=1, bias=False)
-        # model.fc = torch.nn.Linear(512, num_classes)
     else:
         raise ValueError(f"Unsupported model architecture: {config.model.model_type}")
     # model = nn.DataParallel(model)  # Use DataParallel for multi-GPU training
@@ -511,13 +536,13 @@ def train(args, config, flag='inputs-vs-outputs', mode='infoNCE'):
     model.train()
 
     loss_fn = nn.CrossEntropyLoss()
-    # optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=5e-4)
-    optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-4)
+    optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=5e-4)
+    # optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-4)
     
     # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
-    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True)
     # scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[20, 60, 80], gamma=0.1)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(T_max=config.training.epochs, eta_min=0, optimizer=optimizer)
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(T_max=config.training.epochs, eta_min=0, optimizer=optimizer)
 
 
     best_accuracy = 0
@@ -557,9 +582,9 @@ def train(args, config, flag='inputs-vs-outputs', mode='infoNCE'):
         class_losses_list.append(class_losses)
 
         # Visualize t using t-SNE
-        # if epoch in [5, 10, 20, 40, 60, 80, 120]:
+        if epoch in [5, 10, 20, 40, 60, 80, 120]:
         # if epoch in [5, 20, 40, 60, 80, 120, 150]:
-        if epoch in [20, 40, 70, 100, 120]:
+        # if epoch in [20, 40, 70, 100, 120]:
             plot_tsne(t, labels, is_backdoor, epoch, args.outputs_dir)
 
         wandb.log({
@@ -573,7 +598,7 @@ def train(args, config, flag='inputs-vs-outputs', mode='infoNCE'):
         if test_acc > best_accuracy:
             best_accuracy = test_acc
             best_model = copy.deepcopy(model)
-            torch.save(best_model, os.path.join(args.outputs_dir, 'best_model.pth'))
+            # torch.save(best_model, os.path.join(args.outputs_dir, 'best_model.pth'))
             print(f"New best model saved with accuracy: {best_accuracy:.2f}%")
 
         # 调整学习率
@@ -581,10 +606,11 @@ def train(args, config, flag='inputs-vs-outputs', mode='infoNCE'):
         
         # 检查是否应该计算互信息
         should_compute_mi = epoch in [1, 5, 10, 20, 40, 60, 80, 100, 120]
+        # should_compute_mi = epoch in [40, 60, 80, 100, 120]
         # should_compute_mi = epoch in [1, 10, 20, 40, 60, 80, 120, 150]
         # should_compute_mi = epoch in [1, 3, 8, 10, 20, 30, 50]
         # should_compute_mi = epoch in [1, 3, 5, 8, 10, 20, 40, 60]
-        # should_compute_mi = epoch in [1, 10, 40]
+        # should_compute_mi = epoch in [10, 40, 70]
         # should_compute_mi = epoch in [80, 100, 120]
         # should_compute_mi = False
         if should_compute_mi:
@@ -673,25 +699,25 @@ def parse_args():
     parser.add_argument('--test_data_path', type=str, required=True,
                       help='Path to test data')
     parser.add_argument('--test_poison_data_path', type=str,
-                      default="data/imagenet10/ssba/0.1/poisoned_test_data.npz",
+                      default="data/svhn/adaptive_blend/0.1/poisoned_test_data.npz",
                       help='Path to poisoned test data')
     parser.add_argument('--sample_data_path', type=str,
                       default='data/train_dataset.beton',
                       help='Path to sample dataloader')
     
     # Classes to observe
-    parser.add_argument('--observe_classes', type=list, 
-                      help='Classes to observe for MI analysis')
+    parser.add_argument('--observe_classes', type=parse_class_arg, nargs='+',
+                      help='Classes to observe for MI analysis (space-separated values, e.g. 1 "0_clean" "0_backdoor")')
     
     # Override config parameters
-    parser.add_argument('--model', type=str, choices=['resnet18', 'vgg16', 'resnet34'], default='resnet18',
+    parser.add_argument('--model', type=str, choices=['resnet18', 'vgg16'], default='resnet18',
                       help='Model architecture')
-    parser.add_argument('--attack_type', type=str, default='ssba',
-                      choices=['blend', 'badnet', 'wanet', 'label_consistent', 'adaptive_blend', 'ssba'],
+    parser.add_argument('--attack_type', type=str, default='adaptive_blend',
+                      choices=['blend', 'badnet', 'wanet', 'label_consistent', 'adaptive_blend', 'ftrojan'],
                       help='Type of backdoor attack')
-    parser.add_argument('--noise_std_xt', type=float, default=0.4,
+    parser.add_argument('--noise_std_xt', type=float,
                       help='Noise standard deviation for input features')
-    parser.add_argument('--noise_std_ty', type=float, default=0.4,
+    parser.add_argument('--noise_std_ty', type=float,
                       help='Noise standard deviation for target features')
     
     args = parser.parse_args()
@@ -703,8 +729,12 @@ def main():
     # Set up device and random seeds
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     mp.set_start_method('spawn', force=True)
-    torch.manual_seed(0)
     
+    seed = 0
+    torch.manual_seed(seed)
+    # torch.cuda.manual_seed_all(seed)
+    # np.random.seed(seed)
+    # random.seed(seed)
     # Parse arguments and update config
     args = parse_args()
     config = default_config

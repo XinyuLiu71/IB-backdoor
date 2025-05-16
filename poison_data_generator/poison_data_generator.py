@@ -14,6 +14,7 @@ import random
 from PIL import Image
 from datasets import load_dataset
 from sklearn.model_selection import train_test_split
+import cv2
 
 # Device configuration
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -81,10 +82,6 @@ def get_dataset(name, train=True, download=True, root='../data'):
             root=root, train=train, download=download, transform=transform
         )
     elif name == 'imagenet10':
-        # Load the dataset from Hugging Face
-        hf_dataset = load_dataset("JamieSJS/imagenet-10")
-        all_data = hf_dataset['test']  # The dataset only has a 'train' split
-
         img_size = DATASET_CONFIGS[name]['img_size']
         transform = transforms.Compose([
             transforms.Resize(256),
@@ -93,8 +90,8 @@ def get_dataset(name, train=True, download=True, root='../data'):
         ])
 
         # Create custom dataset with train/test split
-        dataset = ImageNet10HFDataset(
-            data=all_data,
+        dataset = ImageNet10LocalDataset(
+            root='../imagenet-10',
             train=train,
             transform=transform,
             test_size=0.2,  # You can adjust the test size
@@ -104,55 +101,52 @@ def get_dataset(name, train=True, download=True, root='../data'):
         pass # Add more datasets here
     return dataset
 
-class ImageNet10HFDataset(torch.utils.data.Dataset):
-    """Custom dataset for ImageNet10 (from Hugging Face) with train/test split"""
+class ImageNet10LocalDataset(torch.utils.data.Dataset):
+    """Custom dataset for ImageNet10 from local directory with train/test split"""
 
-    def __init__(self, data, train=True, transform=None, test_size=0.2, random_state=42):
-        self.data = data
+    def __init__(self, root, train=True, transform=None, test_size=0.2, random_state=42):
+        self.root = root
         self.train = train
         self.transform = transform
-        self.classes = DATASET_CONFIGS['imagenet10']['classes']
+        self.classes = [
+            'n02056570', 'n02128757', 'n02692877', 'n04254680', 'n04467665',
+            'n02085936', 'n02690373', 'n03095699', 'n04285008', 'n07747607'
+        ]
         self.samples = []
+        self.labels = []
 
-        # Extract images and labels
-        images = [item['image'] for item in self.data]
-        labels = [item['label'] for item in self.data]
-        
-        # Map label 10 to 9
-        labels = [9 if label == 10 else label for label in labels]
-        
-        # Print label distribution before split
-        # unique_labels, counts = np.unique(labels, return_counts=True)
-        # print("Label distribution before split:")
-        # for label, count in zip(unique_labels, counts):
-        #     print(f"Class {label}: {count} samples")
+        # Load all images and labels
+        for class_idx, class_name in enumerate(self.classes):
+            class_dir = os.path.join(root, class_name)
+            if not os.path.isdir(class_dir):
+                continue
+
+            for img_name in os.listdir(class_dir):
+                if img_name.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    img_path = os.path.join(class_dir, img_name)
+                    self.samples.append(img_path)
+                    self.labels.append(class_idx)
+
+        print(f"num of samples: {len(self.labels)}")
 
         # Split the data into train and test sets
-        self.train_images, self.test_images, self.train_labels, self.test_labels = train_test_split(
-            images, labels, test_size=test_size, stratify=labels, random_state=random_state
+        self.train_samples, self.test_samples, self.train_labels, self.test_labels = train_test_split(
+            self.samples, self.labels, test_size=test_size, stratify=self.labels, random_state=random_state
         )
-        
-        # Print label distribution after split
-        # if train:
-        #     unique_labels, counts = np.unique(self.train_labels, return_counts=True)
-        #     print("\nTrain set label distribution:")
-        # else:
-        #     unique_labels, counts = np.unique(self.test_labels, return_counts=True)
-        #     print("\nTest set label distribution:")
-        # for label, count in zip(unique_labels, counts):
-        #     print(f"Class {label}: {count} samples")
 
     def __len__(self):
-        return len(self.train_images) if self.train else len(self.test_images)
+        return len(self.train_samples) if self.train else len(self.test_samples)
 
     def __getitem__(self, idx):
         if self.train:
-            img = self.train_images[idx].convert('RGB')
+            img_path = self.train_samples[idx]
             label = self.train_labels[idx]
         else:
-            img = self.test_images[idx].convert('RGB')
+            img_path = self.test_samples[idx]
             label = self.test_labels[idx]
 
+        # Load and transform image
+        img = Image.open(img_path).convert('RGB')
         if self.transform:
             img = self.transform(img)
 
@@ -184,6 +178,8 @@ class TriggerGenerator:
         Returns:
             Poisoned image with blended trigger
         """
+        # if mask.shape[-1] != image.shape[-1]:
+        #     mask = np.repeat(mask[:, :, np.newaxis], image.shape[-1], axis=2)
         poisoned_image = (1 - alpha) * image + alpha * mask
         return poisoned_image
     
@@ -290,6 +286,29 @@ class TriggerGenerator:
             )
             
         return poisoned_image
+    
+    @staticmethod
+    def ftrojan_trigger(image: np.ndarray, freq_coords=[(15, 15), (31, 31)], magnitude=30) -> np.ndarray:
+        """
+        Apply FTrojan-style frequency domain trigger (invisible DCT UV perturbation)
+        Args:
+            image: RGB image in [H, W, C] format, float32 in [0, 1]
+        Returns:
+            Poisoned image with frequency domain trigger
+        """
+        image = (image * 255).astype(np.uint8)
+
+        # Convert to YUV
+        yuv = cv2.cvtColor(image, cv2.COLOR_RGB2YCrCb).astype(np.float32)
+        
+        for ch in [1, 2]:  # Cr and Cb (UV channels)
+            dct_map = cv2.dct(yuv[:, :, ch])
+            for (k1, k2) in freq_coords:
+                dct_map[k1, k2] += magnitude
+            yuv[:, :, ch] = cv2.idct(dct_map)
+
+        poisoned = cv2.cvtColor(np.clip(yuv, 0, 255).astype(np.uint8), cv2.COLOR_YCrCb2RGB)
+        return poisoned.astype(np.float32) / 255.0
 
 
 class PoisonDatasetGenerator:
@@ -429,7 +448,12 @@ class PoisonDatasetGenerator:
             
             return self.trigger_generator.label_consistent_trigger(adv_image, amplitude)
         elif self.attack_type == 'blend':
-            mask = np.load('trigger/Blendnoise.npy') / 255.0
+            if self.dataset == 'imagenet10':
+                mask = np.load('trigger/Blendnoise_224.npy') / 255.0
+                # trigger = Image.open('trigger/hellokitty_224.png').convert('RGB')
+                # mask = np.array(trigger) / 255.0
+            else:
+                mask = np.load('trigger/Blendnoise.npy') / 255.0
             mask = np.expand_dims(mask, axis=-1)
             return self.trigger_generator.blend_trigger(image, mask)
         elif self.attack_type == 'adaptive_blend':
@@ -447,6 +471,8 @@ class PoisonDatasetGenerator:
             return self.trigger_generator.badnet_trigger(image, trigger_size=20 if self.dataset == 'imagenet10' else 5)
         elif self.attack_type == 'wanet':
             return self.trigger_generator.wanet_trigger(image, self.identity_grid, self.noise_grid, noise=True)
+        elif self.attack_type == 'ftrojan':
+            return self.trigger_generator.ftrojan_trigger(image, freq_coords=[(15, 15), (31, 31)], magnitude=30)
 
 
     def generate_poisoned_dataset(self):
@@ -475,7 +501,6 @@ class PoisonDatasetGenerator:
             poisoned_test_images = np.array([self.trigger_generator.label_consistent_trigger(img, amplitude=1) for img in poisoned_test_images])
 
         elif self.attack_type == 'adaptive_blend':
-            # Follow similar logic but with adjustments for poisoning
             poison_count = int(self.poison_percentage * len(train_images))  # n% of train dataset
             clean_data_num = samples_per_class - int(poison_count // n_classes)
             class_0_clean = train_images[train_labels == 0][:clean_data_num]
@@ -493,7 +518,7 @@ class PoisonDatasetGenerator:
                 samples_per_poison_class = len(imgs)
                 regularization_count = int(samples_per_poison_class * self.conservatism_ratio)
                 payload_count = samples_per_poison_class - regularization_count
-                
+                print(f"Class {_class}: {samples_per_poison_class} samples, payload_count: {payload_count}, regularization_count: {regularization_count}")
                 # For each sample
                 for idx in range(imgs.shape[0]):
                     # Add adaptive trigger
@@ -574,8 +599,8 @@ class PoisonDatasetGenerator:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--attack_type', type=str, choices=['blend', 'badnet', 'wanet', 'label_consistent', 'adaptive_blend'], required=False, default='badnet', help='Type of attack')
-    parser.add_argument('--dataset', type=str, default='imagenet10', choices=['cifar10', 'svhn', 'imagenet10'],help='dataset name')
+    parser.add_argument('--attack_type', type=str, choices=['blend', 'badnet', 'wanet', 'label_consistent', 'adaptive_blend', 'ftrojan'], required=False, default='ftrojan', help='Type of attack')
+    parser.add_argument('--dataset', type=str, default='cifar10', choices=['cifar10', 'svhn', 'imagenet10'],help='dataset name')
     parser.add_argument('--target_class', type=int, default=0, help='Target class for attack')
     parser.add_argument('--poison_percentage', type=float, default=0.1, help='Percentage of poisoned data')
     parser.add_argument('--data_dir', type=str, default="../data", help='Data directory')

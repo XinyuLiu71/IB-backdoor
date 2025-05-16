@@ -11,15 +11,15 @@ from typing import List, Union
 @dataclass
 class TrainingConfig:
     """Training configuration parameters."""
-    batch_size: int = 128
-    learning_rate: float = 0.05 # 0.1 for CIFAR10, 0.01 for SVHN
+    batch_size: int = 256
+    learning_rate: float = 0.01 # 0.1 for CIFAR10, 0.01 for SVHN
     epochs: int = 120
     num_workers: int = 16
 
 @dataclass
 class ModelConfig:
     """Model architecture and parameters."""
-    model_type: str = 'resnet34'  # or 'vgg16'
+    model_type: str = 'resnet18'  # or 'vgg16'
     num_classes: int = 10
     noise_std_xt: float = 0.4
     noise_std_ty: float = 0.4
@@ -28,23 +28,23 @@ class ModelConfig:
 @dataclass
 class MIEstimationConfig:
     """Mutual Information estimation parameters."""
-    epochs: int = 350  # for inputs-vs-outputs
-    epochs_y: int = 200  # for outputs-vs-Y
+    epochs: int = 250  # for inputs-vs-outputs
+    epochs_y: int = 250  # for outputs-vs-Y
     # initial_lr: float = 4e-4  # for inputs-vs-outputs
     # initial_lr_y: float = 5e-4  # for outputs-vs-Y
-    initial_lr: float = 1e-5  # for inputs-vs-outputs
-    initial_lr_y: float = 1e-4  # for outputs-vs-Y
+    initial_lr: float = 2e-4  # for inputs-vs-outputs
+    initial_lr_y: float = 2e-4  # for outputs-vs-Y
     weight_decay: float = 1e-4
     grad_clip: float = 5.0
     early_stop_delta: float = 1e-2
-    num_negative_samples: int = 350  # for inputs-vs-outputs
+    num_negative_samples: int = 128  # for inputs-vs-outputs
     num_negative_samples_y: int = 128  # for outputs-vs-Y
 
 @dataclass
 class DataConfig:
     """Data loading and processing parameters."""
     # sampling_datasize: int = 1000
-    total_samples: int = 50000
+    total_samples: int = 40000
     feature_dim: int = 512
     mi_compute_epochs: List[int] = None
 
@@ -73,7 +73,9 @@ class Config:
     data: DataConfig = DataConfig()
     wandb: WandbConfig = WandbConfig()
     observe_classes = [0, '0_backdoor', '0_clean', '0_sample', 1, 2, 3]
-    # observe_classes = ['0_backdoor', '0_clean', '0_sample', 1, 2, 3]
+    # observe_classes = ['0_backdoor', '0_clean']
+    # observe_classes = [0, '0_sample']
+    # observe_classes = [1, 2, 3]
     # observe_classes = ['all']
 
 # Default configuration

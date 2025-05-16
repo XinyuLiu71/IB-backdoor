@@ -65,8 +65,8 @@ def plot_tsne(t_tsne, labels, is_backdoor, epoch, outputs_dir, prefix='t'):
 
 # 输入参数
 prefix = 't'
-epoch = 40
-outputs_dir = 'results/cifar10/adaptive_blend/ob_infoNCE_13_29_0.1_0.4+0.4'
+epoch = 5
+outputs_dir = 'results/svhn/ftrojan/5.91_0.1_0.4+0.4'
 
 # 加载数据
 t_tsne = np.load(os.path.join(outputs_dir, f'tsne_{prefix}_epoch_{epoch}.npy'))

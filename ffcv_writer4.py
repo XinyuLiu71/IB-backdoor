@@ -77,9 +77,29 @@ def create_balanced_sample(backdoor_ds: TensorDataset,
     Returns:
         Balanced combination dataset
     """
+    # # Calculate maximum possible sizes for each part
+    # max_backdoor_size = len(backdoor_ds)
+    # max_clean_size = len(clean_ds)
+    
+    # # Calculate target sizes, ensuring we don't exceed available samples
+    # target_backdoor_size = min(max_backdoor_size, reference_size // 2)
+    # target_clean_size = min(max_clean_size, reference_size - target_backdoor_size)
+    
+    # # Adjust if we can't meet the target size
+    # if target_backdoor_size + target_clean_size < reference_size:
+    #     # If we can't meet the target size, use all available samples
+    #     target_backdoor_size = max_backdoor_size
+    #     target_clean_size = max_clean_size
+    
+    # backdoor_indices = random.sample(range(len(backdoor_ds)), target_backdoor_size)
+    # clean_indices = random.sample(range(len(clean_ds)), target_clean_size)
+
+    print(f"Creating balanced sample: backdoor size={len(backdoor_ds)}, clean size={len(clean_ds)}, reference size={reference_size}")
+
     backdoor_size = min(len(backdoor_ds), reference_size // 2)
     clean_size = reference_size - backdoor_size
     
+    print(f"Selected sizes: backdoor={backdoor_size}, clean={clean_size}")
     backdoor_indices = random.sample(range(len(backdoor_ds)), backdoor_size)
     clean_indices = random.sample(range(len(clean_ds)), clean_size)
     
@@ -124,12 +144,14 @@ def create_class_datasets(train_images: np.ndarray,
         cls0_labels = train_labels[cls0_mask]
         
         # Split poisoned and clean data
-        poison_num = int(len(train_images) * config.poison_rate)
+        poison_num = int(len(train_images) * config.poison_rate*0.5)
         datasets.update({
             'class_0_backdoor': create_tensor_dataset(
                 cls0_images[:poison_num], cls0_labels[:poison_num]),
+                # cls0_images[:poison_num+poison_num/10], cls0_labels[:poison_num,:poison_num/10]),
             'class_0_clean': create_tensor_dataset(
                 cls0_images[poison_num:], cls0_labels[poison_num:])
+                # cls0_images[poison_num+poison_num/10:], cls0_labels[poison_num:,:poison_num/10])
         })
         
         # Create balanced sample dataset
@@ -170,7 +192,7 @@ def main(config: DatasetConfig):
     
     # Create backdoor flags for training data
     total_samples = len(train_images)
-    poison_samples = int(total_samples * config.poison_rate)
+    poison_samples = int(total_samples * config.poison_rate*0.5) # for adaptive_blend
     is_backdoor = torch.zeros(total_samples, dtype=torch.long, device=device)
     is_backdoor[:poison_samples] = 1
     
@@ -185,7 +207,7 @@ def main(config: DatasetConfig):
     
     # Define common field templates
     COMMON_FIELDS = {
-        'image': TorchTensorField(dtype=torch.float32, shape=(3, 224, 224)), # image size depends on the dataset
+        'image': TorchTensorField(dtype=torch.float32, shape=(3, 32, 32)), # need to be replaced: image size depends on the dataset
         'label': IntField()
     }
     TRAIN_FIELDS = {
