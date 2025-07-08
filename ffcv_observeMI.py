@@ -699,7 +699,7 @@ def parse_args():
     parser.add_argument('--test_data_path', type=str, required=True,
                       help='Path to test data')
     parser.add_argument('--test_poison_data_path', type=str,
-                      default="data/svhn/adaptive_blend/0.1/poisoned_test_data.npz",
+                      default="data/cifar10/ftrojan/0.01/poisoned_test_data.npz",
                       help='Path to poisoned test data')
     parser.add_argument('--sample_data_path', type=str,
                       default='data/train_dataset.beton',
