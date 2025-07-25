@@ -599,7 +599,7 @@ class PoisonDatasetGenerator:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--attack_type', type=str, choices=['blend', 'badnet', 'wanet', 'label_consistent', 'adaptive_blend', 'ftrojan'], required=False, default='ftrojan', help='Type of attack')
+    parser.add_argument('--attack_type', type=str, choices=['blend', 'badnet', 'wanet', 'label_consistent', 'adaptive_blend', 'ftrojan'], required=False, default='badnet', help='Type of attack')
     parser.add_argument('--dataset', type=str, default='cifar10', choices=['cifar10', 'svhn', 'imagenet10'],help='dataset name')
     parser.add_argument('--target_class', type=int, default=0, help='Target class for attack')
     parser.add_argument('--poison_percentage', type=float, default=0.1, help='Percentage of poisoned data')

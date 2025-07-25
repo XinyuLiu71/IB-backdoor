@@ -144,7 +144,8 @@ def create_class_datasets(train_images: np.ndarray,
         cls0_labels = train_labels[cls0_mask]
         
         # Split poisoned and clean data
-        poison_num = int(len(train_images) * config.poison_rate*0.5)
+        # poison_num = int(len(train_images) * config.poison_rate*0.5)
+        poison_num = int(len(train_images) * config.poison_rate)
         datasets.update({
             'class_0_backdoor': create_tensor_dataset(
                 cls0_images[:poison_num], cls0_labels[:poison_num]),
