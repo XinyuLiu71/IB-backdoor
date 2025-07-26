@@ -129,10 +129,52 @@ class ImageNet10LocalDataset(torch.utils.data.Dataset):
 
         print(f"num of samples: {len(self.labels)}")
 
-        # Split the data into train and test sets
-        self.train_samples, self.test_samples, self.train_labels, self.test_labels = train_test_split(
-            self.samples, self.labels, test_size=test_size, stratify=self.labels, random_state=random_state
-        )
+        # Split the data into train and test sets - each class: first 1000 for train, next 300 for test
+        self.train_samples = []
+        self.test_samples = []
+        self.train_labels = []
+        self.test_labels = []
+        
+        for class_idx in range(len(self.classes)):
+            # Get all samples for this class
+            class_indices = [i for i, label in enumerate(self.labels) if label == class_idx]
+            class_samples = [self.samples[i] for i in class_indices]
+            
+            total_samples = len(class_samples)
+            print(f"Class {class_idx}: {total_samples} samples")
+            
+            if total_samples < 1300:
+                print(f"Warning: Class {class_idx} only has {total_samples} samples, less than required 1300")
+                # If not enough samples, use all available
+                train_samples = class_samples[:min(1000, total_samples)]
+                test_samples = class_samples[1000:min(1300, total_samples)] if total_samples > 1000 else []
+            else:
+                # Split: first 1000 for train, next 300 for test
+                train_samples = class_samples[:1000]
+                test_samples = class_samples[1000:1300]  # Next 300 samples
+            
+            self.train_samples.extend(train_samples)
+            self.test_samples.extend(test_samples)
+            self.train_labels.extend([class_idx] * len(train_samples))
+            self.test_labels.extend([class_idx] * len(test_samples))
+        
+        print(f"Train samples: {len(self.train_samples)}, Test samples: {len(self.test_samples)}")
+        
+        # Display class distribution
+        if train:
+            train_class_counts = {}
+            for label in self.train_labels:
+                train_class_counts[label] = train_class_counts.get(label, 0) + 1
+            print("Train label distribution:")
+            for class_idx in sorted(train_class_counts.keys()):
+                print(f"Label {class_idx}: {train_class_counts[class_idx]}")
+        else:
+            test_class_counts = {}
+            for label in self.test_labels:
+                test_class_counts[label] = test_class_counts.get(label, 0) + 1
+            print("Test label distribution:")
+            for class_idx in sorted(test_class_counts.keys()):
+                print(f"Label {class_idx}: {test_class_counts[class_idx]}")
 
     def __len__(self):
         return len(self.train_samples) if self.train else len(self.test_samples)
@@ -468,7 +510,7 @@ class PoisonDatasetGenerator:
                 trigger_mask = get_trigger_mask(img_size, self.pieces, self.masked_pieces)
                 return self.trigger_generator.adaptive_blend_trigger(image, mask, trigger_mask, alpha=self.train_alpha)
         elif self.attack_type == 'badnet':
-            return self.trigger_generator.badnet_trigger(image, trigger_size=20 if self.dataset == 'imagenet10' else 5)
+            return self.trigger_generator.badnet_trigger(image, trigger_size=30 if self.dataset == 'imagenet10' else 5)
         elif self.attack_type == 'wanet':
             return self.trigger_generator.wanet_trigger(image, self.identity_grid, self.noise_grid, noise=True)
         elif self.attack_type == 'ftrojan':
@@ -600,7 +642,7 @@ class PoisonDatasetGenerator:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--attack_type', type=str, choices=['blend', 'badnet', 'wanet', 'label_consistent', 'adaptive_blend', 'ftrojan'], required=False, default='badnet', help='Type of attack')
-    parser.add_argument('--dataset', type=str, default='cifar10', choices=['cifar10', 'svhn', 'imagenet10'],help='dataset name')
+    parser.add_argument('--dataset', type=str, default='imagenet10', choices=['cifar10', 'svhn', 'imagenet10'],help='dataset name')
     parser.add_argument('--target_class', type=int, default=0, help='Target class for attack')
     parser.add_argument('--poison_percentage', type=float, default=0.1, help='Percentage of poisoned data')
     parser.add_argument('--data_dir', type=str, default="../data", help='Data directory')

@@ -153,7 +153,8 @@ def train_loop(dataloader, model, loss_fn, optimizer, num_classes):
 
     # 收集数据
     # 预分配张量存储数据
-    total_samples = 50000
+    # total_samples = 50000
+    total_samples = 10000
     t = torch.zeros((total_samples, 128), device=device)  # 特征维度为512
     pred_all = torch.zeros((total_samples, num_classes), device=device)
     labels_all = torch.zeros((total_samples), dtype=torch.long, device=device)
@@ -254,8 +255,8 @@ def estimate_mi(args, device, flag, model_state_dict, sample_loader, class_idx, 
         model.load_state_dict(model_state_dict)
     elif args['model'] == 'vit':
         model = ViT(
-            image_size=32,         # CIFAR-10 image size
-            patch_size=4,          # 4x4 patches
+            image_size=224,         # CIFAR-10 image size
+            patch_size=16,          # 4x4 patches
             num_classes=10,
             dim=128,
             depth=6,
@@ -388,7 +389,7 @@ def estimate_mi_wrapper(args):
     sample_loader_path = f"{base_args['sample_data_path']}/class_{class_idx}.beton"
     
     sample_batch_size = 400 if flag == "inputs-vs-outputs" else 1024
-    sample_loader = Loader(sample_loader_path, batch_size=sample_batch_size, num_workers=20,
+    sample_loader = Loader(sample_loader_path, batch_size=sample_batch_size, num_workers=4,
                             order=OrderOption.RANDOM, pipelines=pipelines, drop_last=False)
     
     return estimate_mi(base_args, device, flag, model_state_dict, sample_loader, class_idx, EPOCHS, mode)
@@ -396,11 +397,12 @@ def estimate_mi_wrapper(args):
 def train(args, flag='inputs-vs-outputs', mode='infoNCE'):
     """ flag = inputs-vs-outputs or outputs-vs-Y """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    batch_size = 256  
-    learning_rate = 0.1
+    batch_size = 128 
+    # learning_rate = 0.1
+    learning_rate = 1e-3
 
     # 动态设置 num_workers
-    num_workers = 20
+    num_workers = 4
 
     # Data decoding and augmentation
     image_pipeline = [ToTensor(), ToDevice(device)]
@@ -443,12 +445,12 @@ def train(args, flag='inputs-vs-outputs', mode='infoNCE'):
         model = VGG16(num_classes=num_classes, noise_std_xt=config['noise_std_xt'], noise_std_ty=config['noise_std_ty'])
     elif config['model'] == 'vit':
         model = ViT(
-            image_size=32,         # CIFAR-10 image size
-            patch_size=4,          # 4x4 patches
+            image_size=224,         # CIFAR-10 image size
+            patch_size=16,          # 4x4 patches
             num_classes=num_classes,
             dim=128,               # embedding dimension
-            depth=6,               # number of transformer layers
-            heads=8,               # number of attention heads
+            depth=4,               # number of transformer layers
+            heads=4,               # number of attention heads
             mlp_dim=256,           # MLP hidden dimension
             pool='cls',            # use CLS token
             channels=3,            # RGB
@@ -465,11 +467,13 @@ def train(args, flag='inputs-vs-outputs', mode='infoNCE'):
     model.train()
 
     loss_fn = nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=5e-4)
+    # optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=5e-4)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=5e-4)
     
     # 使用 StepLR 调整学习率，每10个epoch，lr乘0.5
     # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True)
+    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5, verbose=True)
 
     best_accuracy = 0
     best_model = None
