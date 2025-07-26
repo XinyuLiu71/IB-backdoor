@@ -31,10 +31,10 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from util.cal import get_acc, calculate_asr, compute_class_accuracy, compute_infoNCE, dynamic_early_stop
 from util.plot import plot_and_save_mi, plot_train_acc_ASR, plot_train_loss_by_class, plot_tsne
-import wandb
+import swanlab
 # from sklearn.manifold import TSNE
 from openTSNE import TSNE
-os.environ["WANDB_MODE"] = "offline"
+# os.environ["WANDB_MODE"] = "offline"
 proc_name = 'lover'
 setproctitle.setproctitle(proc_name)
 
@@ -48,8 +48,8 @@ class TrainingConfig:
         # Model settings
         'model': 'vit', # [resnet18, vgg16, vit]
         'num_classes': 10,
-        'noise_std_xt': 0.4,
-        'noise_std_ty': 0.4,
+        'noise_std_xt': 0,
+        'noise_std_ty': 0,
         
         # Training settings
         'epochs': 120,
@@ -84,17 +84,18 @@ class TrainingConfig:
         
         # Data settings
         'attack_type': 'badnet', # ['blend', 'badnet', 'wanet', 'label_consistent']
-        'train_data_path': 'data/train_dataset.beton',
-        'test_data_path': 'data/test_dataset.beton',
+        'train_data_path': 'data/cifar10/badnet/0.1/train_dataset.beton',
+        'test_data_path': 'data/cifar10/badnet/0.1/test_dataset.beton',
         'test_poison_data_path': 'data/cifar10/badnet/0.1/poisoned_test_data.npz',
-        'sample_data_path': 'data/train_dataset.beton',
+        'sample_data_path': 'data/cifar10/badnet/0.1/',
         
         # Logging & output settings
         'outputs_dir': 'results/training',
         'log_frequency': 10,
         
         # MI estimation settings
-        'observe_classes': [0, '0_backdoor', '0_clean', '0_sample', 1, 2, 3, 4, 5, 6, 7, 8, 9],
+        # 'observe_classes': [0, '0_backdoor', '0_clean', '0_sample', 1, 2, 3, 4, 5, 6, 7, 8, 9],
+        'observe_classes': [0, '0_backdoor', '0_clean', '0_sample', 1, 2, 3],
         'mi_estimate_epochs': 450,
         'mi_batch_size': {
             'inputs-vs-outputs': 400,
@@ -136,6 +137,8 @@ class TrainingConfig:
 
     def __getattr__(self, key):
         # 支持 config.xxx 访问
+        if key == 'config':
+            return self.__dict__['config']
         if key in self.config:
             return self.config[key]
         raise AttributeError(f"'TrainingConfig' object has no attribute '{key}'")
@@ -151,7 +154,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, num_classes):
     # 收集数据
     # 预分配张量存储数据
     total_samples = 50000
-    t = torch.zeros((total_samples, 512), device=device)  # 特征维度为512
+    t = torch.zeros((total_samples, 128), device=device)  # 特征维度为512
     pred_all = torch.zeros((total_samples, num_classes), device=device)
     labels_all = torch.zeros((total_samples), dtype=torch.long, device=device)
     is_backdoor_all = torch.zeros((total_samples), dtype=torch.long, device=device)
@@ -160,7 +163,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, num_classes):
     # 注册钩子函数到最后一个 BasicBlock
     # hook_handle = model.layer4[-1].register_forward_hook(hook)
     # hook_handle = model.layer5[-1].register_forward_hook(hook)
-    hook_handle = model.to_latent.register_forward_hook(hook)
+    # hook_handle = model.to_latent.register_forward_hook(hook)
 
     for batch, (X, Y, is_backdoor) in enumerate(dataloader):
         optimizer.zero_grad()
@@ -178,7 +181,8 @@ def train_loop(dataloader, model, loss_fn, optimizer, num_classes):
                 class_counts[c] += mask.sum().item()
         
         with torch.no_grad():
-            M_output = F.adaptive_avg_pool2d(last_conv_output, 1)
+            # M_output = F.adaptive_avg_pool2d(last_conv_output, 1)
+            M_output = model.cls_embedding
             M_output = M_output.view(M_output.shape[0], -1)
         
         batch_size = len(Y)
@@ -191,7 +195,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, num_classes):
         current_idx = end_idx
     
     # 在计算MI之前移除钩子
-    hook_handle.remove()
+    # hook_handle.remove()
     
     # 裁剪张量到实际大小
     t = t[:current_idx].detach()
@@ -240,23 +244,43 @@ def hook(module, input, output):
     last_conv_output = output.detach()
 
 def estimate_mi(args, device, flag, model_state_dict, sample_loader, class_idx, EPOCHS=50, mode='infoNCE'):
-    if args.model == 'resnet18':
-        model = ResNet18(num_classes=10, noise_std_xt=args.noise_std_xt, noise_std_ty=args.noise_std_ty)
+    if args['model'] == 'resnet18':
+        model = ResNet18(num_classes=10, noise_std_xt=args['noise_std_xt'], noise_std_ty=args['noise_std_ty'])
         model.conv1 = nn.Conv2d(in_channels=3, out_channels=64, kernel_size=3, stride=1, padding=1, bias=False)
         model.fc = torch.nn.Linear(512, 10) # 将最后的全连接层改掉
         model.load_state_dict(model_state_dict)
-    elif args.model == 'vgg16':
-        model = VGG16(num_classes=10, noise_std_xt=args.noise_std_xt, noise_std_ty=args.noise_std_ty)
+    elif args['model'] == 'vgg16':
+        model = VGG16(num_classes=10, noise_std_xt=args['noise_std_xt'], noise_std_ty=args['noise_std_ty'])
         model.load_state_dict(model_state_dict)
+    elif args['model'] == 'vit':
+        model = ViT(
+            image_size=32,         # CIFAR-10 image size
+            patch_size=4,          # 4x4 patches
+            num_classes=10,
+            dim=128,
+            depth=6,
+            heads=8,
+            mlp_dim=256,
+            pool='cls',
+            channels=3,
+            dim_head=64,
+            dropout=0.1,
+            emb_dropout=0.1,
+            noise_std_xt=args['noise_std_xt'],
+            noise_std_ty=args['noise_std_ty']
+        )
+        model.load_state_dict(model_state_dict)
+    else:
+        raise ValueError(f"Unsupported model: {args['model']}")
     model.to(device).eval()
 
     # LR = 1e-5
     initial_lr = 1e-4
     if flag == 'inputs-vs-outputs':
-        Y_dim, Z_dim = 512, 3072  # M的维度, X的维度
+        Y_dim, Z_dim = 128, 3072  # M的维度, X的维度
     elif flag == 'outputs-vs-Y':
         initial_lr = 2e-4
-        Y_dim, Z_dim = 10, 512  # Y的维度, M的维度
+        Y_dim, Z_dim = 10, 128  # Y的维度, M的维度
     else:
         raise ValueError('Not supported!')
     
@@ -277,27 +301,30 @@ def estimate_mi(args, device, flag, model_state_dict, sample_loader, class_idx, 
     )
     
     # 注册钩子函数到最后一个 BasicBlock
-    global last_conv_output
-    last_conv_output = None
+    # global last_conv_output
+    # last_conv_output = None
     # hook_handle = model.layer4[-1].register_forward_hook(hook)
     # hook_handle = model.layer5[-1].register_forward_hook(hook)
-    hook_handle = model.to_latent.register_forward_hook(hook)
+    # hook_handle = model.to_latent.register_forward_hook(hook)
 
     for epoch in progress_bar:
         epoch_losses = []
         for batch, (X, _Y) in enumerate(sample_loader):
+            if batch > len(sample_loader)//2 and class_idx == 0:
+                continue
             X, _Y = X.to(device), _Y.to(device)
             with torch.no_grad():
                 with autocast(device_type="cuda"):
                     Y_predicted = model(X)
-                if last_conv_output is None:
-                    raise ValueError("last_conv_output is None. Ensure the hook is correctly registered and the model is correctly defined.")
+                # if last_conv_output is None:
+                #     raise ValueError("last_conv_output is None. Ensure the hook is correctly registered and the model is correctly defined.")
                 # 对 last_conv_output 进行全局平均池化
-                M_output = F.adaptive_avg_pool2d(last_conv_output, 1)
-                M_output = M_output.view(M_output.shape[0], -1)
+                # M_output = F.adaptive_avg_pool2d(last_conv_output, 1)
+                M_output = model.cls_embedding
+                # M_output = M_output.view(M_output.shape[0], -1)
             if flag == 'inputs-vs-outputs':
                 X_flat = torch.flatten(X, start_dim=1)
-                print(f'X_flat.shape: {X_flat.shape}, M_output.shape: {M_output.shape}')
+                # print(f'X_flat.shape: {X_flat.shape}, M_output.shape: {M_output.shape}')
                 with autocast(device_type="cuda"):
                     loss, _ = compute_infoNCE(T, M_output, X_flat, num_negative_samples=128)
             elif flag == 'outputs-vs-Y':
@@ -342,7 +369,11 @@ def estimate_mi(args, device, flag, model_state_dict, sample_loader, class_idx, 
 
 
 def estimate_mi_wrapper(args):
-    base_args, flag, model_state_dict, class_idx, EPOCHS, mode = args    
+    base_args, flag, model_state_dict, class_idx, EPOCHS, mode = args
+    # base_args 现在是 dict，不是 TrainingConfig 实例
+    # 如果需要 TrainingConfig 实例，可以这样恢复：
+    # base_args = TrainingConfig.from_args(base_args)
+    # 但推荐直接用 dict
     device = torch.device(f"cuda:0" if torch.cuda.is_available() else "cpu")
     # if isinstance(class_idx, int) and int(class_idx) > 5:
     #     device = torch.device(f"cuda:1" if torch.cuda.is_available() else "cpu")
@@ -354,7 +385,7 @@ def estimate_mi_wrapper(args):
         'image': image_pipeline,
         'label': label_pipeline,
     }
-    sample_loader_path = f"{base_args.sample_data_path}_class_{class_idx}.beton"
+    sample_loader_path = f"{base_args['sample_data_path']}/class_{class_idx}.beton"
     
     sample_batch_size = 400 if flag == "inputs-vs-outputs" else 1024
     sample_loader = Loader(sample_loader_path, batch_size=sample_batch_size, num_workers=20,
@@ -423,7 +454,9 @@ def train(args, flag='inputs-vs-outputs', mode='infoNCE'):
             channels=3,            # RGB
             dim_head=64,           # dimension per head
             dropout=0.1,           # dropout rate
-            emb_dropout=0.1        # embedding dropout
+            emb_dropout=0.1,       # embedding dropout
+            noise_std_xt=config['noise_std_xt'],
+            noise_std_ty=config['noise_std_ty']
         )
     else:
         raise ValueError(f"Unsupported model: {config['model']}")
@@ -446,8 +479,8 @@ def train(args, flag='inputs-vs-outputs', mode='infoNCE'):
     class_losses_list = []
     previous_test_loss = float('inf')
     
-    # 初始化 wandb
-    wandb.init(
+    # 初始化 swanlab
+    swanlab.init(
         project=f"MI-Analysis-sampleLoader-{config['attack_type']}",
         name=f"{config['model']}_xt{config['noise_std_xt']}_ty{config['noise_std_ty']}_{config['outputs_dir'].split('/')[-2]}_{config['train_data_path'].split('/')[-2]}",
         config={
@@ -473,12 +506,12 @@ def train(args, flag='inputs-vs-outputs', mode='infoNCE'):
         class_losses_list.append(class_losses)
 
         # Visualize t using t-SNE
-        if epoch in [5, 10, 20, 40, 60, 80, 120]:
-            plot_tsne(t, labels, is_backdoor, epoch, config['outputs_dir'])
+        # if epoch in [5, 10, 20, 40, 60, 80, 120]:
+        #     plot_tsne(t, labels, is_backdoor, epoch, config['outputs_dir'])
             # plot_tsne(preds, labels, is_backdoor, epoch, args.outputs_dir, prefix='preds')
             
         # 创建一个包含所有类别损失的图表
-        wandb.log({
+        swanlab.log({
             "train_accuracy": train_acc,
             "test_accuracy": test_acc,
             "test_loss": test_loss,
@@ -501,7 +534,7 @@ def train(args, flag='inputs-vs-outputs', mode='infoNCE'):
         # should_compute_mi = t==1 or t==8 or t==15 or t==25 or t==40 or t==60
         # should_compute_mi = epoch in [1, 5, 10, 20, 40, 60, 80, 100, 120]
         # should_compute_mi = epoch in [1, 3, 8, 10, 20, 30, 50]
-        # should_compute_mi = epoch in [1, 40]
+        # should_compute_mi = epoch in [1, 20, 40]
         # should_compute_mi = t==20 or t==80
         should_compute_mi = False
         if should_compute_mi:
@@ -512,12 +545,14 @@ def train(args, flag='inputs-vs-outputs', mode='infoNCE'):
             # 创建一个进程池
             with concurrent.futures.ProcessPoolExecutor(max_workers=len(config['observe_classes'])) as executor:
                 # 计算 I(X,T) 和 I(T,Y)
-                compute_args = [(config, 'inputs-vs-outputs', model_state_dict, class_idx, 300, mode) 
-                                for class_idx in config['observe_classes']]
+                compute_args = [
+                    (config.config, 'inputs-vs-outputs', model_state_dict, class_idx, 300, mode)
+                    for class_idx in config['observe_classes']
+                ]
                 results_inputs_vs_outputs = list(executor.map(estimate_mi_wrapper, compute_args))
 
             with concurrent.futures.ProcessPoolExecutor(max_workers=len(config['observe_classes'])) as executor:    
-                compute_args = [(config, 'outputs-vs-Y', model_state_dict, class_idx, 250, mode) 
+                compute_args = [(config.config, 'outputs-vs-Y', model_state_dict, class_idx, 300, mode) 
                                 for class_idx in config['observe_classes']]
                 results_Y_vs_outputs = list(executor.map(estimate_mi_wrapper, compute_args))
 
@@ -532,28 +567,28 @@ def train(args, flag='inputs-vs-outputs', mode='infoNCE'):
                 mi_Y_vs_outputs_dict[class_idx] = mi_Y_vs_outputs
                 MI_Y_vs_outputs[class_idx].append(mi_Y_vs_outputs)
 
-            # 保存 MI 图到 wandb
+            # 保存 MI 图到 swanlab
             plot_and_save_mi(mi_inputs_vs_outputs_dict, 'inputs-vs-outputs', config['outputs_dir'], epoch)
             plot_and_save_mi(mi_Y_vs_outputs_dict, 'outputs-vs-Y', config['outputs_dir'], epoch)
 
             np.save(f"{config['outputs_dir']}/infoNCE_MI_I(X,T).npy", MI_inputs_vs_outputs)
             np.save(f"{config['outputs_dir']}/infoNCE_MI_I(Y,T).npy", MI_Y_vs_outputs)
 
-            # 上传图片到 wandb
-            wandb.log({
-                f"I(X;T)_estimation": wandb.Image(os.path.join(config['outputs_dir'], f'mi_plot_inputs-vs-outputs_epoch_{epoch}.png')),
-                f"I(T;Y)_estimation": wandb.Image(os.path.join(config['outputs_dir'], f'mi_plot_outputs-vs-Y_epoch_{epoch}.png'))
+            # 上传图片到 swanlab
+            swanlab.log({
+                f"I(X;T)_estimation": swanlab.Image(os.path.join(config['outputs_dir'], f'mi_plot_inputs-vs-outputs_epoch_{epoch}.png')),
+                f"I(T;Y)_estimation": swanlab.Image(os.path.join(config['outputs_dir'], f'mi_plot_outputs-vs-Y_epoch_{epoch}.png'))
             }, step=epoch)
 
         # 更新前一个epoch的test_loss
         previous_test_loss = test_loss
 
     plot_train_loss_by_class(class_losses_list, epoch, num_classes, config['outputs_dir'])
-    wandb.log({
-        "train_loss_by_class": wandb.Image(os.path.join(config['outputs_dir'], 'train_loss_by_class_plot.png'))
+    swanlab.log({
+        "train_loss_by_class": swanlab.Image(os.path.join(config['outputs_dir'], 'train_loss_by_class_plot.png'))
     })
 
-    wandb.finish()
+    swanlab.finish()
     return MI_inputs_vs_outputs, MI_Y_vs_outputs, best_model
 
 
@@ -585,7 +620,7 @@ if __name__ == '__main__':
     parser.add_argument('--train_data_path', type=str, default='0', help='path of training data')
     parser.add_argument('--test_data_path', type=str, default='0', help='path of test data')
     parser.add_argument('--test_poison_data_path', type=str, default="data/cifar10/badnet/0.1/poisoned_test_data.npz", help='path of poisoned test data')
-    parser.add_argument('--sample_data_path', type=str, default='data/train_dataset.beton', help='path of sample dataloader')
+    parser.add_argument('--sample_data_path', type=str, default='', help='path of sample dataloader')
     parser.add_argument('--model', type=str, default='vit', help='model')
 
     # parser.add_argument('--observe_classes', type=list, default=[0,1,2,3,4,5,6,7,8,9], help='class')
