@@ -208,7 +208,7 @@ def main(config: DatasetConfig):
     
     # Define common field templates
     COMMON_FIELDS = {
-        'image': TorchTensorField(dtype=torch.float32, shape=(3, 32, 32)), # need to be replaced: image size depends on the dataset
+        'image': TorchTensorField(dtype=torch.float32, shape=(3, 224, 224)), # need to be replaced: image size depends on the dataset
         'label': IntField()
     }
     TRAIN_FIELDS = {

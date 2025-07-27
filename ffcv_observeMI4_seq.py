@@ -23,8 +23,8 @@ from torch.amp import autocast
 import copy
 from torch import Tensor
 from typing import Callable
-import concurrent.futures
-import torch.multiprocessing as mp
+import concurrent.futures  # 需要用于I(T;Y)的并发计算
+import torch.multiprocessing as mp  # 需要用于多进程设置
 from tqdm import tqdm
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
@@ -49,7 +49,7 @@ class TrainingConfig:
         'model': 'vit', # [resnet18, vgg16, vit]
         'num_classes': 10,
         'noise_std_xt': 0,
-        'noise_std_ty': 0,
+        'noise_std_ty': 0.1,
         
         # Training settings
         'epochs': 120,
@@ -265,8 +265,8 @@ def estimate_mi(args, device, flag, model_state_dict, sample_loader, class_idx, 
             pool='cls',            # use CLS token
             channels=3,            # RGB
             dim_head=64,           # dimension per head
-            dropout=0.1,           # dropout rate
-            emb_dropout=0.1,       # embedding dropout
+            dropout=0.2,           # dropout rate
+            emb_dropout=0.2,       # embedding dropout
             noise_std_xt=args['noise_std_xt'],
             noise_std_ty=args['noise_std_ty']
         )
@@ -278,7 +278,7 @@ def estimate_mi(args, device, flag, model_state_dict, sample_loader, class_idx, 
     # LR = 1e-5
     initial_lr = 1e-4
     if flag == 'inputs-vs-outputs':
-        Y_dim, Z_dim = 128, 150528  # M的维度, X的维度
+        Y_dim, Z_dim = 128, 37632  # M的维度, X的维度（压缩后约为原来的一半）
     elif flag == 'outputs-vs-Y':
         initial_lr = 5e-4
         Y_dim, Z_dim = 10, 128  # Y的维度, M的维度
@@ -291,7 +291,7 @@ def estimate_mi(args, device, flag, model_state_dict, sample_loader, class_idx, 
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True)
     M = []
     
-    # 使用tqdm.tqdm而不是tqdm.auto，并设置position参数
+    # 进度条设置，支持多进程的position参数
     position = mp.current_process()._identity[0] if mp.current_process()._identity else 0
     progress_bar = tqdm(
         range(EPOCHS),
@@ -324,7 +324,11 @@ def estimate_mi(args, device, flag, model_state_dict, sample_loader, class_idx, 
                 M_output = model.cls_embedding
                 # M_output = M_output.view(M_output.shape[0], -1)
             if flag == 'inputs-vs-outputs':
-                X_flat = torch.flatten(X, start_dim=1)
+                # 方法1: 使用全局平均池化来压缩X的维度
+                # 先压缩到一半大小，再全局平均池化
+                X_compressed = F.adaptive_avg_pool2d(X, (X.shape[2]//2, X.shape[3]//2))
+                X_flat = torch.flatten(X_compressed, start_dim=1)
+                
                 # print(f'X_flat.shape: {X_flat.shape}, M_output.shape: {M_output.shape}')
                 with autocast(device_type="cuda"):
                     loss, _ = compute_infoNCE(T, M_output, X_flat, num_negative_samples=128)
@@ -388,7 +392,12 @@ def estimate_mi_wrapper(args):
     }
     sample_loader_path = f"{base_args['sample_data_path']}/class_{class_idx}.beton"
     
-    sample_batch_size = 14 if flag == "inputs-vs-outputs" else 512
+    # 根据计算模式设置不同的batch_size
+    if flag == "inputs-vs-outputs":
+        # I(X,T) 使用顺序计算，可以用较大batch_size
+        sample_batch_size = 200
+    else:  # outputs-vs-Y
+        sample_batch_size = 512
     sample_loader = Loader(sample_loader_path, batch_size=sample_batch_size, num_workers=4,
                             order=OrderOption.RANDOM, pipelines=pipelines, drop_last=False)
     
@@ -536,9 +545,9 @@ def train(args, flag='inputs-vs-outputs', mode='infoNCE'):
         # should_compute_mi = (t % pow(2, t//10) == 0) and (test_loss < previous_test_loss if t < 10 else True)
         # should_compute_mi = test_loss < previous_test_loss
         # should_compute_mi = t==1 or t==8 or t==15 or t==25 or t==40 or t==60
-        should_compute_mi = epoch in [1, 5, 10, 20, 40, 60, 80, 100, 120]
+        # should_compute_mi = epoch in [1, 5, 10, 20, 40, 60, 80, 100, 120]
         # should_compute_mi = epoch in [1, 3, 8, 10, 20, 30, 50]
-        # should_compute_mi = epoch in [1, 20, 40]
+        should_compute_mi = epoch in [1, 20, 40, 70]
         # should_compute_mi = t==20 or t==80
         # should_compute_mi = False
         if should_compute_mi:
@@ -546,16 +555,17 @@ def train(args, flag='inputs-vs-outputs', mode='infoNCE'):
             mi_inputs_vs_outputs_dict = {}
             mi_Y_vs_outputs_dict = {}
             model_state_dict = model.state_dict()
-            # 创建一个进程池
-            with concurrent.futures.ProcessPoolExecutor(max_workers=len(config['observe_classes'])) as executor:
-                # 计算 I(X,T) 和 I(T,Y)
-                compute_args = [
-                    (config.config, 'inputs-vs-outputs', model_state_dict, class_idx, 300, mode)
-                    for class_idx in config['observe_classes']
-                ]
-                results_inputs_vs_outputs = list(executor.map(estimate_mi_wrapper, compute_args))
+            
+            # 顺序计算 I(X,T) - 因为数据维度大，GPU利用率高
+            results_inputs_vs_outputs = []
+            for class_idx in config['observe_classes']:
+                compute_args = (config.config, 'inputs-vs-outputs', model_state_dict, class_idx, 300, mode)
+                result = estimate_mi_wrapper(compute_args)
+                results_inputs_vs_outputs.append(result)
+                print(f"Completed I(X,T) estimation for class {class_idx}")
 
-            with concurrent.futures.ProcessPoolExecutor(max_workers=len(config['observe_classes'])) as executor:    
+            # 并发计算 I(T,Y) - 因为数据维度小，需要并发来提高效率
+            with concurrent.futures.ProcessPoolExecutor(max_workers=len(config['observe_classes'])) as executor:
                 compute_args = [(config.config, 'outputs-vs-Y', model_state_dict, class_idx, 300, mode) 
                                 for class_idx in config['observe_classes']]
                 results_Y_vs_outputs = list(executor.map(estimate_mi_wrapper, compute_args))
@@ -617,7 +627,7 @@ def ob_infoNCE(config):
 
 if __name__ == '__main__':
     device = torch.device('cuda')
-    mp.set_start_method('spawn', force=True)
+    mp.set_start_method('spawn', force=True)  # 需要用于I(T;Y)的并发计算
     torch.manual_seed(0)
     parser = argparse.ArgumentParser()
     parser.add_argument('--outputs_dir', type=str, default='results/ob_infoNCE_06_22', help='output_dir')

@@ -38,6 +38,11 @@ DATASET_CONFIGS = {
         'classes': ['n01440764', 'n02102040', 'n02979186', 'n03000684', 'n03028079',
                     'n03394916', 'n03417042', 'n03425413', 'n03445777', 'n03888257']
     },
+    'imagenet100': {
+        'n_classes': 100,
+        'img_size': 224,
+        'channels': 3,
+    },
 }
 
 def get_dataset(name, train=True, download=True, root='../data'):
@@ -96,6 +101,18 @@ def get_dataset(name, train=True, download=True, root='../data'):
             transform=transform,
             test_size=0.2,  # You can adjust the test size
             random_state=42  # For reproducibility
+        )
+    elif name == 'imagenet100':
+        img_size = DATASET_CONFIGS[name]['img_size']
+        transform = transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(img_size),
+            transforms.ToTensor()
+        ])
+        dataset = ImageNet100LocalDataset(
+            root='../ImageNet100',
+            train=train,
+            transform=transform
         )
     else:
         pass # Add more datasets here
@@ -186,6 +203,51 @@ class ImageNet10LocalDataset(torch.utils.data.Dataset):
         else:
             img_path = self.test_samples[idx]
             label = self.test_labels[idx]
+
+        # Load and transform image
+        img = Image.open(img_path).convert('RGB')
+        if self.transform:
+            img = self.transform(img)
+
+        return img, label
+
+class ImageNet100LocalDataset(torch.utils.data.Dataset):
+    """Custom dataset for ImageNet100 from local directory with train/val split"""
+
+    def __init__(self, root, train=True, transform=None):
+        self.root = root
+        self.train = train
+        self.transform = transform
+        self.samples = []
+        self.labels = []
+
+        # Use train directory for training, val directory for testing
+        data_dir = os.path.join(root, 'train' if train else 'val')
+        
+        # Get all class directories
+        class_dirs = sorted([d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))])
+        
+        print(f"Loading ImageNet100 {'train' if train else 'val'} data from {data_dir}")
+        print(f"Found {len(class_dirs)} classes")
+
+        # Load all images and labels
+        for class_idx, class_name in enumerate(class_dirs):
+            class_dir = os.path.join(data_dir, class_name)
+            
+            for img_name in os.listdir(class_dir):
+                if img_name.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    img_path = os.path.join(class_dir, img_name)
+                    self.samples.append(img_path)
+                    self.labels.append(class_idx)
+
+        print(f"Total samples: {len(self.labels)}")
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        img_path = self.samples[idx]
+        label = self.labels[idx]
 
         # Load and transform image
         img = Image.open(img_path).convert('RGB')
@@ -642,7 +704,7 @@ class PoisonDatasetGenerator:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--attack_type', type=str, choices=['blend', 'badnet', 'wanet', 'label_consistent', 'adaptive_blend', 'ftrojan'], required=False, default='badnet', help='Type of attack')
-    parser.add_argument('--dataset', type=str, default='imagenet10', choices=['cifar10', 'svhn', 'imagenet10'],help='dataset name')
+    parser.add_argument('--dataset', type=str, default='imagenet10', choices=['cifar10', 'svhn', 'imagenet10', 'imagenet100'],help='dataset name')
     parser.add_argument('--target_class', type=int, default=0, help='Target class for attack')
     parser.add_argument('--poison_percentage', type=float, default=0.1, help='Percentage of poisoned data')
     parser.add_argument('--data_dir', type=str, default="../data", help='Data directory')
